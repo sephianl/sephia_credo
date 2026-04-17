@@ -1,7 +1,7 @@
-defmodule CredoChecks.UnusedSetupKeysPerTestTest do
+defmodule SephiaCredo.Checks.UnusedSetupKeysPerTestTest do
   use Credo.Test.Case, async: true
 
-  alias CredoChecks.UnusedSetupKeysPerTest
+  alias SephiaCredo.Checks.UnusedSetupKeysPerTest
 
   describe "module-level setup" do
     test "flags a test that does not consume some setup keys" do

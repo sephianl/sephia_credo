@@ -1,6 +1,6 @@
-defmodule CredoChecks.UnusedSetupKeysPerTest do
+defmodule SephiaCredo.Checks.UnusedSetupKeysPerTest do
   @moduledoc """
-  Stricter, per-test variant of `CredoChecks.UnusedSetupKeysInTests`.
+  Stricter, per-test variant of `SephiaCredo.Checks.UnusedSetupKeysInTests`.
 
   Flags any test that does not consume one or more setup keys that
   are in scope for it. The fix is either to destructure the unused
@@ -200,10 +200,6 @@ defmodule CredoChecks.UnusedSetupKeysPerTest do
 
     if MapSet.equal?(expanded, consumed), do: expanded, else: do_expand(expanded, dep_graph)
   end
-
-  # ===========================================================================
-  # AST helpers (mirrored from CredoChecks.UnusedSetupKeysInTests)
-  # ===========================================================================
 
   defp extract_module_body({:defmodule, _, [_, [do: body]]}), do: body
 
