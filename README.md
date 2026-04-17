@@ -17,7 +17,7 @@ SephiaCredo requires [Credo](https://hexdocs.pm/credo) to already be installed i
 If your project uses [Igniter](https://hexdocs.pm/igniter), a single command will add the dependency and register all checks in your `.credo.exs`:
 
 ```bash
-mix igniter.install sephia_credo
+mix igniter.install sephia_credo --only dev,test
 ```
 
 ### Manual
