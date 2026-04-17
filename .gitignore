@@ -11,3 +11,4 @@ sephia_credo-*.tar
 .direnv/
 devenv.local.nix
 .devenv.flake.nix
+.pre-commit-config.yaml
