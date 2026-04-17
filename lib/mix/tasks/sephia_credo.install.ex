@@ -18,11 +18,11 @@ if Code.ensure_loaded?(Igniter) do
     alias Igniter.Code.List
     alias Igniter.Code.Map
 
-    @checks [
-      {SephiaCredo.Checks.AppendInLoop, []},
-      {SephiaCredo.Checks.NoDateTimeOperatorCompare, []},
-      {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
-      {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
+    @check_tuples [
+      "{SephiaCredo.Checks.AppendInLoop, []}",
+      "{SephiaCredo.Checks.NoDateTimeOperatorCompare, []}",
+      "{SephiaCredo.Checks.UnusedSetupKeysInTests, []}",
+      "{SephiaCredo.Checks.UnusedSetupKeysPerTest, []}"
     ]
 
     @impl Igniter.Mix.Task
@@ -46,35 +46,36 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp update_credo_config(zipper) do
-      with {:ok, configs_zipper} <-
-             Common.move_to_cursor(zipper, "%{configs: __cursor__()}"),
-           {:ok, first_config} <-
-             List.move_to_list_item(configs_zipper, fn _ -> true end) do
-        checks_list = Sourceror.parse_string!(inspect(@checks))
-
-        Map.put_in_map(
-          first_config,
-          [:checks],
-          checks_list,
-          &append_checks/1
+      checks_list =
+        Sourceror.parse_string!(
+          "[" <> Enum.join(@check_tuples, ", ") <> "]"
         )
-      end
-    end
 
-    defp append_checks(checks_zipper) do
       eq_pred = fn existing_zipper, new_node ->
         Sourceror.to_string(Sourceror.Zipper.node(existing_zipper)) ==
           Sourceror.to_string(new_node)
       end
 
-      Enum.reduce_while(@checks, {:ok, checks_zipper}, fn check_tuple, {:ok, z} ->
-        node = Sourceror.parse_string!(inspect(check_tuple))
+      with {:ok, configs_zipper} <-
+             Common.move_to_cursor(zipper, "%{configs: __cursor__()}"),
+           {:ok, first_config} <-
+             List.move_to_list_item(configs_zipper, fn _ -> true end) do
+        Map.put_in_map(
+          first_config,
+          [:checks, :enabled],
+          checks_list,
+          fn enabled_zipper ->
+            Enum.reduce_while(@check_tuples, {:ok, enabled_zipper}, fn check_str, {:ok, z} ->
+              node = Sourceror.parse_string!(check_str)
 
-        case List.prepend_new_to_list(z, node, eq_pred) do
-          {:ok, z} -> {:cont, {:ok, z}}
-          other -> {:halt, other}
-        end
-      end)
+              case List.prepend_new_to_list(z, node, eq_pred) do
+                {:ok, z} -> {:cont, {:ok, z}}
+                other -> {:halt, other}
+              end
+            end)
+          end
+        )
+      end
     end
 
     defp default_credo_config do
@@ -83,12 +84,14 @@ if Code.ensure_loaded?(Igniter) do
         configs: [
           %{
             name: "default",
-            checks: [
-              {SephiaCredo.Checks.AppendInLoop, []},
-              {SephiaCredo.Checks.NoDateTimeOperatorCompare, []},
-              {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
-              {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
-            ]
+            checks: %{
+              enabled: [
+                {SephiaCredo.Checks.AppendInLoop, []},
+                {SephiaCredo.Checks.NoDateTimeOperatorCompare, []},
+                {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
+                {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
+              ]
+            }
           }
         ]
       }

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: self-hosted
+    env:
+      DEVENV_NO_GIT_HOOKS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get dependencies
+        run: devenv shell mix deps.get
+
+      - name: Compile
+        run: devenv shell mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: devenv shell mix format --check-formatted
+
+      - name: Run tests
+        run: devenv shell mix test
