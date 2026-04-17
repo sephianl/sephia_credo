@@ -47,9 +47,7 @@ if Code.ensure_loaded?(Igniter) do
 
     defp update_credo_config(zipper) do
       checks_list =
-        Sourceror.parse_string!(
-          "[" <> Enum.join(@check_tuples, ", ") <> "]"
-        )
+        Sourceror.parse_string!("[" <> Enum.join(@check_tuples, ", ") <> "]")
 
       eq_pred = fn existing_zipper, new_node ->
         Sourceror.to_string(Sourceror.Zipper.node(existing_zipper)) ==
@@ -64,18 +62,20 @@ if Code.ensure_loaded?(Igniter) do
           first_config,
           [:checks, :enabled],
           checks_list,
-          fn enabled_zipper ->
-            Enum.reduce_while(@check_tuples, {:ok, enabled_zipper}, fn check_str, {:ok, z} ->
-              node = Sourceror.parse_string!(check_str)
-
-              case List.prepend_new_to_list(z, node, eq_pred) do
-                {:ok, z} -> {:cont, {:ok, z}}
-                other -> {:halt, other}
-              end
-            end)
-          end
+          &prepend_checks(&1, eq_pred)
         )
       end
+    end
+
+    defp prepend_checks(zipper, eq_pred) do
+      Enum.reduce_while(@check_tuples, {:ok, zipper}, fn check_str, {:ok, z} ->
+        node = Sourceror.parse_string!(check_str)
+
+        case List.prepend_new_to_list(z, node, eq_pred) do
+          {:ok, z} -> {:cont, {:ok, z}}
+          other -> {:halt, other}
+        end
+      end)
     end
 
     defp default_credo_config do

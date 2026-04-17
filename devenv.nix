@@ -18,6 +18,7 @@
       name = "mix-format";
       files = ".ex[s]?$";
       entry = "mix format";
+      stages = [ "pre-commit" ];
     };
     mix-check = {
       enable = !config.devenv.isTesting;
