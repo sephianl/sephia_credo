@@ -1,6 +1,6 @@
-defmodule SephiaCredo.Checks.UnusedSetupKeysPerTest do
+defmodule CredoChecks.UnusedSetupKeysPerTest do
   @moduledoc """
-  Stricter, per-test variant of `SephiaCredo.Checks.UnusedSetupKeysInTests`.
+  Stricter, per-test variant of `CredoChecks.UnusedSetupKeysInTests`.
 
   Flags any test that does not consume one or more setup keys that
   are in scope for it. The fix is either to destructure the unused
@@ -41,12 +41,14 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysPerTest do
   defp find_issues(ast, issue_meta) do
     module_body = extract_module_body(ast)
     {module_setup_keys, _} = extract_setup(module_body)
+    module_setup_body = extract_setup_body(module_body)
+    module_dep_graph = build_dependency_graph(module_setup_body, module_setup_keys)
     describes = collect_describe_blocks(ast)
 
     module_test_issues =
       module_body
       |> extract_tests()
-      |> Enum.flat_map(&check_test(&1, module_setup_keys, [], issue_meta))
+      |> Enum.flat_map(&check_test(&1, module_setup_keys, [], module_dep_graph, issue_meta))
 
     describe_test_issues =
       Enum.flat_map(describes, fn body ->
@@ -54,16 +56,25 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysPerTest do
         free_keys = extract_setup_destructures(body)
         in_scope = Enum.uniq(module_setup_keys ++ describe_keys)
 
+        describe_setup_body = extract_setup_body(body)
+        describe_dep_graph = build_dependency_graph(describe_setup_body, in_scope)
+
+        merged_dep_graph =
+          Map.merge(module_dep_graph, describe_dep_graph, fn _k, v1, v2 ->
+            MapSet.union(v1, v2)
+          end)
+
         body
         |> extract_tests()
-        |> Enum.flat_map(&check_test(&1, in_scope, free_keys, issue_meta))
+        |> Enum.flat_map(&check_test(&1, in_scope, free_keys, merged_dep_graph, issue_meta))
       end)
 
     module_test_issues ++ describe_test_issues
   end
 
-  defp check_test({_name, used_keys, line}, in_scope_keys, free_keys, issue_meta) do
-    consumed = Enum.uniq(used_keys ++ free_keys)
+  defp check_test({_name, used_keys, line}, in_scope_keys, free_keys, dep_graph, issue_meta) do
+    direct_consumed = Enum.uniq(used_keys ++ free_keys)
+    consumed = expand_with_dependencies(direct_consumed, dep_graph)
 
     case in_scope_keys -- consumed do
       [] ->
@@ -84,6 +95,115 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysPerTest do
         ]
     end
   end
+
+  # ===========================================================================
+  # Dependency tracking — transitively consumed keys
+  # ===========================================================================
+
+  defp extract_setup_body(nil), do: nil
+
+  defp extract_setup_body({:__block__, _, statements}),
+    do: extract_setup_body_from_list(statements)
+
+  defp extract_setup_body(statement), do: extract_setup_body_from_list(List.wrap(statement))
+
+  defp extract_setup_body_from_list(statements) do
+    Enum.find_value(statements, fn
+      {:setup, _meta, [body]} -> unwrap_do(body)
+      {:setup, _meta, [_context_match, body]} -> unwrap_do(body)
+      _ -> nil
+    end)
+  end
+
+  defp unwrap_do(do: body), do: body
+  defp unwrap_do(body), do: body
+
+  defp build_dependency_graph(nil, _return_keys), do: %{}
+
+  defp build_dependency_graph(body, return_keys) do
+    return_key_set = MapSet.new(return_keys)
+
+    body
+    |> unwrap_block()
+    |> Enum.reduce(%{}, fn
+      {:=, _, [pattern, rhs]}, acc ->
+        merge_assignment_deps(pattern, rhs, return_key_set, acc)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp merge_assignment_deps(pattern, rhs, return_key_set, acc) do
+    pattern
+    |> extract_assigned_vars()
+    |> Enum.reduce(acc, fn var_name, inner_acc ->
+      if MapSet.member?(return_key_set, var_name) do
+        new_deps = collect_var_refs(rhs, return_key_set, var_name)
+        Map.update(inner_acc, var_name, new_deps, &MapSet.union(&1, new_deps))
+      else
+        inner_acc
+      end
+    end)
+  end
+
+  defp unwrap_block({:__block__, _, statements}), do: statements
+  defp unwrap_block(statement), do: List.wrap(statement)
+
+  defp extract_assigned_vars(atom) when is_atom(atom), do: []
+
+  defp extract_assigned_vars({name, _, ctx}) when is_atom(name) and is_atom(ctx) do
+    if String.starts_with?(Atom.to_string(name), "_"), do: [], else: [name]
+  end
+
+  defp extract_assigned_vars({:{}, _, elements}),
+    do: Enum.flat_map(elements, &extract_assigned_vars/1)
+
+  defp extract_assigned_vars({left, right}),
+    do: extract_assigned_vars(left) ++ extract_assigned_vars(right)
+
+  defp extract_assigned_vars(_), do: []
+
+  defp collect_var_refs(ast, key_set, exclude_self) do
+    {_, refs} =
+      Macro.prewalk(ast, MapSet.new(), fn
+        {name, _, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
+          if name != exclude_self and MapSet.member?(key_set, name) do
+            {node, MapSet.put(acc, name)}
+          else
+            {node, acc}
+          end
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    refs
+  end
+
+  defp expand_with_dependencies(consumed_keys, dep_graph) when map_size(dep_graph) == 0,
+    do: consumed_keys
+
+  defp expand_with_dependencies(consumed_keys, dep_graph) do
+    consumed_keys
+    |> MapSet.new()
+    |> do_expand(dep_graph)
+    |> MapSet.to_list()
+  end
+
+  defp do_expand(consumed, dep_graph) do
+    expanded =
+      Enum.reduce(consumed, consumed, fn key, acc ->
+        deps = Map.get(dep_graph, key, MapSet.new())
+        MapSet.union(acc, deps)
+      end)
+
+    if MapSet.equal?(expanded, consumed), do: expanded, else: do_expand(expanded, dep_graph)
+  end
+
+  # ===========================================================================
+  # AST helpers (mirrored from CredoChecks.UnusedSetupKeysInTests)
+  # ===========================================================================
 
   defp extract_module_body({:defmodule, _, [_, [do: body]]}), do: body
 

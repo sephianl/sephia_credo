@@ -1,7 +1,7 @@
-defmodule SephiaCredo.Checks.UnusedSetupKeysPerTestTest do
+defmodule CredoChecks.UnusedSetupKeysPerTestTest do
   use Credo.Test.Case, async: true
 
-  alias SephiaCredo.Checks.UnusedSetupKeysPerTest
+  alias CredoChecks.UnusedSetupKeysPerTest
 
   describe "module-level setup" do
     test "flags a test that does not consume some setup keys" do
@@ -190,6 +190,153 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysPerTestTest do
           test "uses both", %{company: c, depot: d} do
             assert {c, d}
           end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> refute_issues()
+    end
+  end
+
+  describe "dependency tracking" do
+    test "key used to construct another consumed key is transitively consumed" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          admin = create_admin(company)
+          route = insert_route(company, admin)
+          %{company: company, admin: admin, route: route}
+        end
+
+        test "uses only route", %{route: r} do
+          assert r
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> refute_issues()
+    end
+
+    test "key NOT used to construct any consumed key is still flagged" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          admin = create_admin(company)
+          unrelated = create_unrelated()
+          route = insert_route(company, admin)
+          %{company: company, admin: admin, unrelated: unrelated, route: route}
+        end
+
+        test "uses only route", %{route: r} do
+          assert r
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ ":unrelated"
+        refute issue.message =~ ":company"
+        refute issue.message =~ ":admin"
+        refute issue.message =~ ":route"
+      end)
+    end
+
+    test "transitive dependencies through multiple levels" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          depot = create_depot(company)
+          admin = create_admin(depot)
+          route = insert_route(admin)
+          %{company: company, depot: depot, admin: admin, route: route}
+        end
+
+        test "uses only route", %{route: r} do
+          assert r
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> refute_issues()
+    end
+
+    test "describe-level setup deps include module-level keys" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          depot = create_depot(company)
+          %{company: company, depot: depot}
+        end
+
+        describe "with admin" do
+          setup %{company: company, depot: depot} do
+            admin = create_admin(company, depot)
+            %{admin: admin}
+          end
+
+          test "uses only admin", %{admin: a} do
+            assert a
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> refute_issues()
+    end
+
+    test "reassigned variable accumulates dependencies" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          admin = create_admin(company)
+          route = insert_route(company)
+          route = update_route(route, admin)
+          %{company: company, admin: admin, route: route}
+        end
+
+        test "uses only route", %{route: r} do
+          assert r
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysPerTest)
+      |> refute_issues()
+    end
+
+    test "ok-tuple return pattern with dependencies" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = create_company()
+          admin = create_admin(company)
+          {:ok, %{company: company, admin: admin}}
+        end
+
+        test "uses only admin", %{admin: a} do
+          assert a
         end
       end
       """
