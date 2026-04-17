@@ -17,6 +17,7 @@ if Code.ensure_loaded?(Igniter) do
     alias Igniter.Code.Common
     alias Igniter.Code.List
     alias Igniter.Code.Map
+    alias Igniter.Project.Deps
 
     @check_tuples [
       "{SephiaCredo.Checks.AppendInLoop, []}",
@@ -37,8 +38,10 @@ if Code.ensure_loaded?(Igniter) do
 
     @impl Igniter.Mix.Task
     def igniter(igniter) do
-      Igniter.create_or_update_elixir_file(
-        igniter,
+      igniter
+      |> Deps.set_dep_option(:sephia_credo, :only, [:dev, :test])
+      |> Deps.set_dep_option(:sephia_credo, :runtime, false)
+      |> Igniter.create_or_update_elixir_file(
         ".credo.exs",
         default_credo_config(),
         &update_credo_config/1
