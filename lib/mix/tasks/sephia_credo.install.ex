@@ -20,7 +20,11 @@ if Code.ensure_loaded?(Igniter) do
 
     @check_tuples [
       "{SephiaCredo.Checks.AppendInLoop, []}",
-      "{SephiaCredo.Checks.NoDateTimeOperatorCompare, []}",
+      "{SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []}",
+      "{SephiaCredo.Checks.AssertWithoutAssertion, []}",
+      "{SephiaCredo.Checks.ProcessSleepInTests, []}",
+      "{SephiaCredo.Checks.RawRuntimeError, []}",
+      "{SephiaCredo.Checks.StructComparisonOperator, []}",
       "{SephiaCredo.Checks.UnusedSetupKeysInTests, []}",
       "{SephiaCredo.Checks.UnusedSetupKeysPerTest, []}"
     ]
@@ -87,7 +91,11 @@ if Code.ensure_loaded?(Igniter) do
             checks: %{
               enabled: [
                 {SephiaCredo.Checks.AppendInLoop, []},
-                {SephiaCredo.Checks.NoDateTimeOperatorCompare, []},
+                {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
+                {SephiaCredo.Checks.AssertWithoutAssertion, []},
+                {SephiaCredo.Checks.ProcessSleepInTests, []},
+                {SephiaCredo.Checks.RawRuntimeError, []},
+                {SephiaCredo.Checks.StructComparisonOperator, []},
                 {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
                 {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
               ]
