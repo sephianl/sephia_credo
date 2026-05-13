@@ -188,34 +188,38 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTests do
     end)
   end
 
-  defp extract_match_keys({:%{}, _, pairs}) do
-    Enum.flat_map(pairs, fn
-      {key, {name, _, _}} when is_atom(key) and is_atom(name) ->
-        if String.starts_with?(Atom.to_string(name), "_"), do: [], else: [key]
+  defp extract_match_keys(node), do: extract_match_keys(node, [])
 
-      {key, _value} when is_atom(key) ->
-        [key]
+  defp extract_match_keys({:%{}, _, pairs}, acc) do
+    Enum.reduce(pairs, acc, fn
+      {key, {name, _, _}}, acc when is_atom(key) and is_atom(name) ->
+        if String.starts_with?(Atom.to_string(name), "_"), do: acc, else: [key | acc]
 
-      _ ->
-        []
+      {key, _value}, acc when is_atom(key) ->
+        [key | acc]
+
+      _, acc ->
+        acc
     end)
   end
 
-  defp extract_match_keys({:=, _, [left, right]}) do
-    extract_match_keys(left) ++ extract_match_keys(right)
+  defp extract_match_keys({:=, _, [left, right]}, acc) do
+    extract_match_keys(right, extract_match_keys(left, acc))
   end
 
-  defp extract_match_keys(_), do: []
+  defp extract_match_keys(_, acc), do: acc
 
-  defp extract_context_bindings({name, _meta, ctx}) when is_atom(name) and is_atom(ctx) do
-    if String.starts_with?(Atom.to_string(name), "_"), do: [], else: [name]
+  defp extract_context_bindings(node), do: extract_context_bindings(node, [])
+
+  defp extract_context_bindings({name, _meta, ctx}, acc) when is_atom(name) and is_atom(ctx) do
+    if String.starts_with?(Atom.to_string(name), "_"), do: acc, else: [name | acc]
   end
 
-  defp extract_context_bindings({:=, _, [left, right]}) do
-    extract_context_bindings(left) ++ extract_context_bindings(right)
+  defp extract_context_bindings({:=, _, [left, right]}, acc) do
+    extract_context_bindings(right, extract_context_bindings(left, acc))
   end
 
-  defp extract_context_bindings(_), do: []
+  defp extract_context_bindings(_, acc), do: acc
 
   defp extract_context_accesses(_body, []), do: []
 
