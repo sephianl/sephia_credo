@@ -63,6 +63,12 @@ mix deps.get
 }
 ```
 
+## Upgrading from 0.2
+
+`UnusedSetupKeysPerTest` now flags only a test that consumes **none** of the setup keys in scope for it, instead of every test that fails to consume all of them. The old rule treated a shared fixture as a defect and was too noisy to enable — on a 767-file suite it reported 1747 issues, against 152 under the new rule. No config change is needed; expect far fewer reports.
+
+Both setup-key checks now follow a context handed to a `def`/`defp` in the same file, so `analyze(ctx, ...)` helper patterns no longer report their keys as unused.
+
 ## Upgrading from 0.1
 
 `NoDateTimeOperatorCompare` has been replaced with the more general `StructComparisonOperator` (now also covers `Decimal` and `Version`, with a configurable `extra_modules` list). Update your `.credo.exs`: replace the old tuple with `{SephiaCredo.Checks.StructComparisonOperator, []}`.
@@ -78,8 +84,8 @@ mix deps.get
 | `RawRuntimeError` | Warning | Flags `raise "msg"` and `raise RuntimeError, ...` — error trackers can't group these meaningfully |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
-| `UnusedSetupKeysInTests` | Design | Flags `setup` return keys never destructured by any test in scope |
-| `UnusedSetupKeysPerTest` | Design | Flags individual tests that don't consume all in-scope setup keys |
+| `UnusedSetupKeysInTests` | Design | Flags `setup` return keys no test in scope consumes |
+| `UnusedSetupKeysPerTest` | Design | Flags a test that consumes none of the setup keys in scope for it |
 
 ### AppendInLoop
 
@@ -111,11 +117,27 @@ Inside a polling fn (configurable via `poll_functions:`, defaults to `[:wait_unt
 
 ### UnusedSetupKeysInTests
 
-Detects keys returned from `setup` blocks that are never destructured by any `test` in the same `describe` block (or module top-level). Dead setup keys add noise and slow down test comprehension — they should be removed from the setup return value.
+ExUnit has no lazy `let`: every key a `setup` returns is built for every test in its scope, whether that test looks at it or not. This check flags a key that *no* test in scope consumes — a fixture the whole block pays for and nobody reads.
+
+A test consumes a key by destructuring it (`test "...", %{key: v}`), by reading it off its context binding (`ctx.key`), or by handing the context to a `def`/`defp` **in the same file** that does either — so the common `analyze(ctx, ...)` helper pattern is understood. A context handed to something the check cannot read (an imported or remote function) makes the test opaque, and an opaque test suppresses the report rather than risking a false positive.
+
+Before deleting a key to satisfy this check, confirm nothing reads it. See [usage-rules.md](usage-rules.md) for why that order matters.
 
 ### UnusedSetupKeysPerTest
 
-A more granular companion to `UnusedSetupKeysInTests`. Instead of checking whether *any* test uses a key, it checks each test individually and flags tests that don't destructure all in-scope setup keys. This helps keep tests focused by surfacing unnecessary fixtures.
+The narrow companion to `UnusedSetupKeysInTests`. Where that one asks whether *any* test uses a key, this one asks whether *this* test uses any key at all, and flags a test that consumes none of the fixture in scope for it.
+
+It deliberately says nothing about a test that consumes *part* of a shared fixture — different tests reading different parts of one setup is what `setup` is for.
+
+Known limitation: a test can depend on a fixture without naming it, when `setup` inserts rows that the code under test then queries. This check cannot see that and will flag such a test — disable it for those files rather than deleting the setup.
+
+## Usage rules for AI agents
+
+This package ships a [usage-rules.md](usage-rules.md) consumed by [usage_rules](https://hexdocs.pm/usage_rules). It documents how to respond to each check — in particular, that a report is a suspicion to verify rather than a licence to delete code:
+
+```bash
+mix usage_rules.sync AGENTS.md sephia_credo
+```
 
 ## Contributing
 

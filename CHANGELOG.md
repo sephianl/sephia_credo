@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-19
+
+### Changed
+
+- `UnusedSetupKeysInTests` and `UnusedSetupKeysPerTest` now resolve a context handed to a `def`/`defp` in the same file, following it through helper chains, pipes and `%{ctx | ...}` copies, and counting the keys that helper reads. A test that hands its context to something unresolvable — imported or remote — is treated as opaque and consumes every key in scope, so the checks stay quiet rather than report a live fixture as dead. Previously any test that passed `ctx` to a helper read as using nothing.
+- `UnusedSetupKeysPerTest` now flags only a test that consumes **none** of the setup keys in scope for it. The previous rule — every test must consume every in-scope key — treated a shared fixture as a defect and was too noisy to enable: 1747 reports against 152 under the new rule, on the same 767-file suite. Its message and moduledoc now explain the cost being avoided (ExUnit has no lazy `let`), and document the case it cannot see: a `setup` whose inserted rows are queried without being named.
+
+### Added
+
+- `usage-rules.md`, consumed by [usage_rules](https://hexdocs.pm/usage_rules), documenting how to respond to each check — starting with the rule that a report is a suspicion to verify, not a licence to delete code.
+- `SephiaCredo.TestContext`, the shared AST reading behind both setup-key checks.
+
 ## [0.2.0] - 2026-05-12
 
 ### Added

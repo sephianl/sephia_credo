@@ -315,6 +315,157 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       end)
     end
 
+    test "counts keys a helper reads off the context it was handed" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "helper reads the context" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "hands the whole context to a helper", ctx do
+            assert analyze(ctx)
+          end
+
+          defp analyze(context), do: context.model
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ ":depot"
+        refute issue.message =~ ":model"
+      end)
+    end
+
+    test "counts keys a helper destructures from its parameter" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "helper destructures" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "hands the whole context to a helper", ctx do
+            assert analyze(ctx, :arg)
+          end
+
+          defp analyze(%{model: model}, _arg), do: model
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ ":depot"
+        refute issue.message =~ ":model"
+      end)
+    end
+
+    test "follows the context through a chain of helpers" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "helper chain" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "hands the whole context to a helper", ctx do
+            assert analyze(ctx)
+          end
+
+          defp analyze(context), do: solve(context)
+          defp solve(context), do: context.model
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ ":depot"
+        refute issue.message =~ ":model"
+      end)
+    end
+
+    test "follows a context piped into a helper" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "piped context" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "pipes the context into a helper", ctx do
+            assert ctx |> analyze(:arg)
+          end
+
+          defp analyze(context, _arg), do: context.model
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ ":depot"
+        refute issue.message =~ ":model"
+      end)
+    end
+
+    test "follows a context copy built with the map update syntax" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "context copy" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "rewrites one key, then hands the copy to a helper", ctx do
+            copy = %{ctx | depot: 3}
+
+            assert analyze(copy)
+          end
+
+          defp analyze(context), do: context.model
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> refute_issues()
+    end
+
+    test "a helper it cannot resolve consumes every key, rather than none" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "imported helper" do
+          setup do
+            %{model: 1, depot: 2}
+          end
+
+          test "hands the context to an imported helper", ctx do
+            assert Support.Fixtures.analyze(ctx)
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> refute_issues()
+    end
+
     test "test without context match flags all keys as unused" do
       """
       defmodule SampleTest do

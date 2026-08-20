@@ -1,7 +1,7 @@
 defmodule SephiaCredo.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.3.0"
   @description "Credo checks for common Elixir pitfalls"
   @github_url "https://github.com/sephianl/sephia_credo"
 
@@ -33,14 +33,14 @@ defmodule SephiaCredo.MixProject do
       {:credo, "~> 1.7"},
       {:igniter, "~> 0.7", optional: true},
       {:ex_check, "~> 0.16", only: :dev, runtime: false},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
 
   defp package do
     [
       licenses: ["MIT"],
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG* usage-rules.md),
       links: %{"GitHub" => @github_url}
     ]
   end
@@ -49,7 +49,7 @@ defmodule SephiaCredo.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md"]
+      extras: ["README.md", "usage-rules.md", "CHANGELOG.md"]
     ]
   end
 end
