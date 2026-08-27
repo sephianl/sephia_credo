@@ -3,6 +3,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
 
   alias SephiaCredo.Checks.UnusedSetupKeysInTests
 
+  defp triggers(issues), do: issues |> Enum.map(& &1.trigger) |> Enum.sort()
+
   describe "describe-local setup" do
     test "flags keys never used by any test in the describe" do
       """
@@ -22,12 +24,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":depot"
-        assert issue.message =~ ":route"
-        refute issue.message =~ ":company"
-        refute issue.message =~ ":admin"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":depot", ":route"]
       end)
     end
 
@@ -50,9 +48,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        refute issue.message =~ ":admin"
+        assert issue.trigger == ":company"
       end)
     end
 
@@ -118,12 +114,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        assert issue.message =~ ":depot"
-        assert issue.message =~ ":conversation"
-        refute issue.message =~ ":admin"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":company", ":conversation", ":depot"]
       end)
     end
 
@@ -176,11 +168,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":depot"
-        assert issue.message =~ ":admin"
-        refute issue.message =~ ":company"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":admin", ":depot"]
       end)
     end
 
@@ -228,9 +217,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        refute issue.message =~ ":admin"
+        assert issue.trigger == ":company"
       end)
     end
 
@@ -254,10 +241,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":depot"
-        refute issue.message =~ ":company"
-        refute issue.message =~ ":admin"
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -281,10 +265,83 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        refute issue.message =~ ":admin"
-        refute issue.message =~ ":depot"
+        assert issue.trigger == ":company"
+      end)
+    end
+
+    test "treats a `%{...} = ctx` destructure in the test body as use" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "body destructure" do
+          setup do
+            %{company: 1, depot: 2, admin: 3}
+          end
+
+          test "destructures company and admin in the body", ctx do
+            %{company: c, admin: a} = ctx
+
+            assert {c, a}
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":depot"
+      end)
+    end
+
+    test "combines a body destructure with keys a helper reads off the same context" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "body destructure plus helper" do
+          setup do
+            %{company: 1, depot: 2, opts: 3}
+          end
+
+          test "destructures opts, hands the whole context to a helper", ctx do
+            %{opts: opts} = ctx
+
+            assert build(ctx, opts)
+          end
+
+          defp build(%{company: company, depot: depot}, _opts), do: {company, depot}
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> refute_issues()
+    end
+
+    test "ignores a body destructure of a map that is not the context" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "unrelated destructure" do
+          setup do
+            %{company: 1, depot: 2}
+          end
+
+          test "destructures a literal, not the context", ctx do
+            %{depot: d} = %{depot: 9}
+
+            assert d
+            assert ctx.company
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -308,10 +365,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        assert issue.message =~ ":depot"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":company", ":depot"]
       end)
     end
 
@@ -336,8 +391,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.message =~ ":depot"
-        refute issue.message =~ ":model"
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -362,8 +416,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.message =~ ":depot"
-        refute issue.message =~ ":model"
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -389,8 +442,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.message =~ ":depot"
-        refute issue.message =~ ":model"
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -415,8 +467,7 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
       |> assert_issue(fn issue ->
-        assert issue.message =~ ":depot"
-        refute issue.message =~ ":model"
+        assert issue.trigger == ":depot"
       end)
     end
 
@@ -484,10 +535,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.trigger == "setup"
-        assert issue.message =~ ":company"
-        assert issue.message =~ ":admin"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":admin", ":company"]
       end)
     end
   end
@@ -511,9 +560,8 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.message =~ ":company"
-        assert issue.message =~ ":depot"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":company", ":depot"]
       end)
     end
 
@@ -535,11 +583,188 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTestsTest do
       """
       |> to_source_file("sample_test.exs")
       |> run_check(UnusedSetupKeysInTests)
-      |> assert_issue(fn issue ->
-        assert issue.message =~ ":conn"
-        assert issue.message =~ ":company"
-        assert issue.message =~ ":depot"
+      |> assert_issues(fn issues ->
+        assert triggers(issues) == [":company", ":conn", ":depot"]
       end)
+    end
+  end
+
+  describe "dead setup bindings" do
+    test "does not flag a key whose variable builds another key a test uses" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "chained fixture" do
+          setup do
+            company = insert(:company)
+            depot = insert(:depot, company: company)
+
+            %{company: company, depot: depot}
+          end
+
+          test "uses depot only", %{depot: d} do
+            assert d
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> refute_issues()
+    end
+
+    test "flags a bound key at its binding line when nothing else uses the variable" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "dead binding" do
+          setup do
+            company = insert(:company)
+            depot = insert(:depot)
+
+            %{company: company, depot: depot}
+          end
+
+          test "uses depot only", %{depot: d} do
+            assert d
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":company"
+        assert issue.line_no == 6
+        assert issue.message =~ "company"
+      end)
+    end
+
+    test "cascades: reports both keys when the chain is dead end to end" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "dead chain" do
+          setup do
+            company = insert(:company)
+            depot = insert(:depot, company: company)
+
+            %{company: company, depot: depot, admin: 3}
+          end
+
+          test "uses admin only", %{admin: a} do
+            assert a
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issues(fn issues ->
+        assert Enum.map(issues, & &1.trigger) |> Enum.sort() == [":company", ":depot"]
+        assert Enum.map(issues, & &1.line_no) |> Enum.sort() == [6, 7]
+      end)
+    end
+
+    test "does not flag a key whose variable is used for a side effect" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "side effect" do
+          setup do
+            company = insert(:company)
+            on_exit(fn -> cleanup(company) end)
+
+            %{company: company, admin: 2, route: 3}
+          end
+
+          test "uses admin only", %{admin: a} do
+            assert a
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":route"
+      end)
+    end
+
+    test "falls back to the setup line for an inline map value" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "inline value" do
+          setup do
+            %{company: insert(:company), admin: 2}
+          end
+
+          test "uses admin only", %{admin: a} do
+            assert a
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":company"
+        assert issue.line_no == 5
+      end)
+    end
+
+    test "handles the {:ok, map} return form" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        describe "ok tuple" do
+          setup do
+            company = insert(:company)
+
+            {:ok, %{company: company, admin: 2}}
+          end
+
+          test "uses admin only", %{admin: a} do
+            assert a
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == ":company"
+        assert issue.line_no == 6
+      end)
+    end
+
+    test "applies to a module-level setup" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        setup do
+          company = insert(:company)
+          depot = insert(:depot, company: company)
+
+          %{company: company, depot: depot}
+        end
+
+        test "uses depot only", %{depot: d} do
+          assert d
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(UnusedSetupKeysInTests)
+      |> refute_issues()
     end
   end
 

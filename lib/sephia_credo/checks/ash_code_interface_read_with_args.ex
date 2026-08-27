@@ -1,20 +1,19 @@
 defmodule SephiaCredo.Checks.AshCodeInterfaceReadWithArgs do
-  @moduledoc """
-  Flag `define :name, action: :read, args: [...]` inside an Ash
-  `code_interface do ... end` block.
-
-  Ash's generic `:read` action declares no inputs. Calling a code interface
-  defined with `args:` against `:read` raises `Ash.Error.Invalid.NoSuchInput`
-  at runtime. The bug typically ships silently — LiveView callers wrap in
-  `else {:error, _} -> ...` so the page just "doesn't do anything".
-
-  Either define a custom read action that declares those args, or remove the
-  `args:` option.
-  """
-
   use Credo.Check,
     base_priority: :high,
-    category: :warning
+    category: :warning,
+    explanations: [
+      check: """
+      Ash's generic `:read` action declares no inputs, so a code interface
+      defined against it with `args:` raises `Ash.Error.Invalid.NoSuchInput`
+      when called.
+
+          define :by_status, action: :read, args: [:status]
+
+      Define a custom read action that declares those args, or drop `args:`.
+      The failure ships silently when callers match on `{:error, _}`.
+      """
+    ]
 
   @impl true
   def run(source_file, params \\ []) do

@@ -1,43 +1,38 @@
 defmodule SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll do
-  @moduledoc """
-  Flag `:sys.get_state/1` inside a polling anonymous function when it isn't
-  protected by a `try / catch :exit` block.
-
-  When a polling helper like `wait_until` repeatedly probes a GenServer with
-  `:sys.get_state(pid)`, a slow or blocked GenServer can exceed the default
-  5-second timeout. `:sys.get_state/1` then raises `:exit` — which `rescue`
-  clauses don't catch — and the test crashes instead of retrying.
-
-  The fix: pass an explicit short timeout AND catch `:exit`, e.g.
-
-      :sys.get_state(pid, 100)
-
-      try do
-        :sys.get_state(pid, 100)
-      catch
-        :exit, _ -> false
-      end
-
-  ## Config
-
-    * `poll_functions` — list of function name atoms whose anonymous-fn
-      arguments are treated as polling bodies. Default: `[:wait_until]`.
-
-  This check is opt-in: it's not added to the default installer config.
-  Add it manually to your `.credo.exs` if you use poll-style helpers.
-  """
-
   use Credo.Check,
     base_priority: :high,
     category: :warning,
     param_defaults: [
       poll_functions: [:wait_until]
+    ],
+    explanations: [
+      check: """
+      A polling helper that probes a GenServer with `:sys.get_state(pid)` uses
+      the default 5-second timeout. A blocked GenServer makes it raise `:exit`,
+      which `rescue` does not catch, so the test crashes instead of retrying.
+
+      Pass a short timeout *and* catch the exit:
+
+          try do
+            :sys.get_state(pid, 100)
+          catch
+            :exit, _ -> false
+          end
+
+      `poll_functions` names the helpers whose anonymous-function arguments
+      count as polling bodies.
+      """,
+      params: [
+        poll_functions: "Names of helpers whose anonymous-function arguments are polling bodies."
+      ]
     ]
+
+  alias Credo.Check.Params
 
   @impl true
   def run(source_file, params \\ []) do
     issue_meta = IssueMeta.for(source_file, params)
-    poll_funs = params[:poll_functions] || [:wait_until]
+    poll_funs = Params.get(params, :poll_functions, __MODULE__)
 
     case Credo.Code.ast(source_file) do
       {:ok, ast} -> walk(ast, false, issue_meta, poll_funs, [])

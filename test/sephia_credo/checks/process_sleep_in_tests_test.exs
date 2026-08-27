@@ -168,6 +168,98 @@ defmodule SephiaCredo.Checks.ProcessSleepInTestsTest do
       |> refute_issues()
     end
 
+    test "does not flag the sleep inside a bounded retry helper" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        defp wait_until(fun, retries \\\\ 100)
+        defp wait_until(_fun, 0), do: flunk("timed out")
+
+        defp wait_until(fun, retries) do
+          if fun.() do
+            :ok
+          else
+            Process.sleep(20)
+            wait_until(fun, retries - 1)
+          end
+        end
+
+        test "waits", do: wait_until(fn -> true end)
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(ProcessSleepInTests)
+      |> refute_issues()
+    end
+
+    test "still flags a sleep in a test body that also has a retry helper" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        defp eventually(fun, attempts) do
+          if fun.() do
+            true
+          else
+            Process.sleep(50)
+            eventually(fun, attempts - 1)
+          end
+        end
+
+        test "waits" do
+          Process.sleep(200)
+          eventually(fn -> true end, 5)
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(ProcessSleepInTests)
+      |> assert_issue(fn issue ->
+        assert issue.line_no == 14
+      end)
+    end
+
+    test "flags a helper that sleeps but never recurses" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        defp settle(_fun, _attempts) do
+          Process.sleep(50)
+          :ok
+        end
+
+        test "waits", do: settle(fn -> true end, 3)
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(ProcessSleepInTests)
+      |> assert_issue()
+    end
+
+    test "flags a helper that recurses without decrementing" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        defp spin(fun, attempts) do
+          if fun.() do
+            :ok
+          else
+            Process.sleep(50)
+            spin(fun, attempts)
+          end
+        end
+
+        test "waits", do: spin(fn -> true end, 3)
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(ProcessSleepInTests)
+      |> assert_issue()
+    end
+
     test "does not flag a local sleep/1 function" do
       """
       defmodule SampleTest do

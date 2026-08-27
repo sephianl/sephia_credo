@@ -1,28 +1,26 @@
 defmodule SephiaCredo.Checks.AssertWithoutAssertion do
-  @moduledoc """
-  Flag `assert pattern = expr` in test files when the bound variables are
-  never used in the enclosing test/setup body.
-
-  When the LHS pattern is a bare binding (or only binds new variables), the
-  match succeeds vacuously even if `expr` is wrong — `assert x = nil` passes
-  because the match against `x` always succeeds. The "assertion" tests
-  nothing.
-
-  Either reference the bound variables in subsequent assertions, or use
-  `assert match?(pattern, expr)` to make the match check the assertion.
-
-  Only files whose path ends in `_test.exs` are checked.
-  """
-
   use Credo.Check,
     base_priority: :high,
-    category: :warning
+    category: :warning,
+    explanations: [
+      check: """
+      `assert x = expr` succeeds whatever `expr` is: a bare variable pattern
+      always matches, so the assertion tests nothing.
+
+          assert user = Accounts.fetch(id)
+
+      If the bound variables are never read afterwards, the line is dead.
+      Assert on them, or use `assert match?(pattern, expr)`. Test files only.
+      """
+    ]
+
+  alias SephiaCredo.TestFile
 
   @scopes [:test, :setup, :setup_all]
 
   @impl true
   def run(source_file, params \\ []) do
-    if test_file?(source_file) do
+    if TestFile.test_file?(source_file) do
       issue_meta = IssueMeta.for(source_file, params)
 
       case Credo.Code.ast(source_file) do
@@ -33,12 +31,6 @@ defmodule SephiaCredo.Checks.AssertWithoutAssertion do
       []
     end
   end
-
-  defp test_file?(%Credo.SourceFile{filename: filename}) when is_binary(filename) do
-    String.ends_with?(filename, "_test.exs")
-  end
-
-  defp test_file?(_), do: false
 
   defp find_issues(ast, issue_meta) do
     {_ast, issues} =

@@ -1,18 +1,22 @@
 defmodule SephiaCredo.Checks.RawRuntimeError do
-  @moduledoc """
-  Forbid raising bare `RuntimeError`.
-
-  `raise "msg"` lowers to `raise RuntimeError, "msg"`. Both produce a
-  `RuntimeError` exception, which error trackers (Appsignal, Sentry, etc.)
-  cannot group meaningfully — every distinct message becomes its own issue.
-
-  Define a `defexception` module with a descriptive name and raise that
-  instead, so related errors group correctly.
-  """
-
   use Credo.Check,
     base_priority: :high,
-    category: :warning
+    category: :warning,
+    explanations: [
+      check: """
+      `raise "msg"` lowers to `raise RuntimeError, "msg"`. Error trackers
+      group exceptions by module, so every distinct message becomes its own
+      issue and the signal is lost in the noise.
+
+      Define an exception with a descriptive name and raise that:
+
+          defmodule ImportFailedError do
+            defexception [:message]
+          end
+
+          raise ImportFailedError, "row 12 has no depot"
+      """
+    ]
 
   @impl true
   def run(source_file, params \\ []) do

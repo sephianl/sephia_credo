@@ -61,6 +61,12 @@ thing is used and confirmed it is genuinely unused.** Run the test file after th
 Flags `list ++ [item]` inside `Enum.reduce`, `for/reduce`, `Enum.flat_map_reduce` or a recursive
 function. `++` copies its left-hand list, so appending in a loop is O(n²).
 
+Only the accumulator on the **left** is flagged. `item ++ acc` is prepending, not appending, and is
+not reported; neither is a loop-invariant list built for a call, nor `acc ++ f(acc)`, which needs
+the accumulator in order and has no prepend-and-reverse form. In a recursive function only a whole
+parameter counts as the accumulator — a variable destructured out of one is a piece of it, and a
+piece is bounded by the whole.
+
 Fix by prepending and reversing once: `Enum.reduce(items, [], &[&1 | &2]) |> Enum.reverse()`. Do
 not "fix" it by moving the `++` behind a function call — the cost is the same.
 
@@ -81,6 +87,83 @@ afterwards. A bare variable pattern always matches, so the assertion tests nothi
 Fix by asserting on the bound values afterwards, or use `assert match?(pattern, expr)`. Deleting
 the line is also valid — but only once you know what the test meant to assert.
 
+### `EnumAtInLoop` (refactor)
+
+Flags `Enum.at(enumerable, i)` with a computed index inside `Enum.*`/`Stream.*` iteration,
+`Task.async_stream`, or a `for` comprehension. `Enum.at` walks the enumerable to reach the index, so
+calling it per element makes the loop O(n²).
+
+Fix by indexing once outside the loop — `Map.new(Enum.with_index(rows), fn {r, i} -> {i, r} end)` —
+or, when the collections line up positionally, iterate them together with `Enum.zip/2` and drop the
+index. A non-negative integer-literal index is bounded work and is not reported. A negative one is
+reported: reaching `-1` walks to the end. Hoist it — the enumerable does not change per iteration.
+`List.last/1` is the same O(n) walk and is not a fix.
+
+**Before acting, check how big the collection is.** The check cannot see that, so `Enum.at` over a
+three-element config list is reported exactly like a walk over a large matrix. Both are O(n²); only
+one is worth changing. If it is small and fixed, silence the line rather than restructuring.
+
+### `KeywordBagParameter` (refactor)
+
+Flags a parameter the body only reaches into with `Keyword.get/fetch/fetch!/take/has_key?`. Reading
+three or more distinct keys off one parameter means it is a parameter list in disguise.
+
+Fix by naming the keys as parameters — the issue message spells out the signature. Do **not** "fix"
+it by renaming `opts`: detection is by shape, so the report is unchanged and nothing improved. A
+keyword list that is purely forwarded is never reported, and neither is one the body reads keys off
+*and* passes on whole, nor an `@impl` callback whose arity the behaviour fixes.
+
+Tune with `min_keys` (default 3) and `ignored_keys` (framework keys that get forwarded, not named).
+
+### `MapAsSet` (refactor)
+
+Flags `Enum.member?(Map.keys(map), key)`, its pipe form, and `key in Map.keys(map)` — all the same
+AST. Each builds the full key list and scans it, where `Map.has_key?(map, key)` answers in O(1).
+
+Fix with `Map.has_key?/2`. If the thing is conceptually a set rather than a map you are indexing,
+`MapSet.member?/2` is also constant time. `Map.values/1` membership is not flagged — there is no
+constant-time equivalent, so there would be no fix to suggest.
+
+### `MultiStepMutationWithoutTransaction` (warning)
+
+Flags a function performing 2+ database mutations without `Repo.transaction/1`, `Ash.transaction/2`,
+or `Ecto.Multi`. If the second write fails, the first is already committed and the row set is
+half-updated.
+
+Counts `Repo.*` writes (any alias ending in `Repo`), direct `Ash.*` mutations, and Ash code-interface
+calls on resources listed in `ash_resources:`. Local mutating helpers are followed, so moving the
+writes into private functions does not hide them.
+
+Branches are not summed — a `case`/`cond`/`if`/`with`/`fn`/`try` contributes its worst branch, not
+the total, and a function-level `rescue`/`catch`/`else`/`after` reads the same as the `try` it lowers
+to. Writes are counted per call site, so a single write inside a loop counts as one. Test files are
+skipped entirely (the ExUnit sandbox rolls each test back).
+
+Fix by wrapping the sequence in a transaction. Do not "fix" it by moving one write into a helper —
+the check follows local calls, and the atomicity problem is unchanged either way. If the writes are
+deliberately non-atomic — progress or telemetry committed ahead of the work it describes — add the
+function to `excluded_functions:` rather than restructuring it.
+
+### `PatternMatchInFunctionHead` (refactor)
+
+Flags a single-clause function whose entire body is a `case` on one of its own parameters. Those are
+function clauses written the long way.
+
+Fix by moving each `case` pattern into its own function head. Only the unambiguous shape is reported
+— one clause, no guard, whole body is a `case` on a bare parameter with more than one branch, and no
+`rescue`/`catch`/`else`/`after` clause on the function — so a report here always has a mechanical
+fix.
+
+### `PreloadInLoop` (warning)
+
+Flags `Repo.preload` or `Ash.load` inside `Enum.*`/`Stream.*` iteration, `Task.async_stream`, or a
+`for` comprehension: one query per element, the textbook N+1.
+
+Fix by loading the collection once — `Repo.preload(users, :posts)` or `Ash.load(records, :items)`;
+both take a list and batch the queries. Only per-element regions are examined, so the batched call
+that *feeds* a loop is already correct and is not what the report is pointing at — read the line
+number before rewriting anything.
+
 ### `ProcessSleepInTests` (refactor, test files)
 
 Flags `Process.sleep/1` in test bodies, `setup`, and `setup_all`. It trades suite time for
@@ -88,6 +171,10 @@ flakiness on slower machines.
 
 Fix with `assert_receive`, `assert_eventually`, or a polling helper that waits on the actual
 condition. Raising the sleep duration is not a fix.
+
+A sleep inside a bounded retry helper — a `def`/`defp` that calls itself with one argument
+decremented by a literal — is exempt. That sleep is the backoff between attempts, which is what the
+fix above asks you to write.
 
 ### `RawRuntimeError` (warning)
 
@@ -113,18 +200,36 @@ without a surrounding `try/catch :exit`. The default 5s timeout exits rather tha
 
 Fix by passing a short explicit timeout *and* wrapping in `try ... catch :exit, _ -> false`.
 
+### `TrivialWrapperFunction` (refactor)
+
+Flags a single-clause `defp` whose whole body is one call to another module, forwarding its
+parameters unchanged.
+
+Fix by calling the target directly at the call site and deleting the wrapper. Do not "fix" it by
+adding a pointless argument to make it look non-trivial. Wrappers that supply an argument, reorder
+or transform them, match a pattern, guard, carry a default, or add a `rescue`/`catch`/`else`/`after`
+clause are already not reported.
+
 ### `UnusedSetupKeysInTests` (design, test files)
 
-Flags a key returned from `setup` that no test in its scope consumes — a fixture built for every
-test in the block and read by none of them.
+Flags fixture work a `setup` does that no test in its scope reads. This is the unused-variable
+warning the compiler cannot give you: in `company = insert(:company); %{company: company}` the
+return map counts as a use, so the compiler stays quiet — but if no test reads `:company`, the row
+is inserted for every test in the block and thrown away.
 
-A test consumes a key by destructuring it (`test "...", %{key: v}`), by reading it off its context
-binding (`ctx.key`), or by handing the context to a `def`/`defp` **in the same file** that does
-either. A context handed to something the check cannot read — an imported or remote function — makes
-the test opaque, and an opaque test suppresses the report rather than risking a false positive.
+A test consumes a key by destructuring it — in its head (`test "...", %{key: v}`) or anywhere in its
+body (`%{key: v} = ctx`) — by reading it off its context binding (`ctx.key`), or by handing the
+context to a `def`/`defp` **in the same file** that does either. A context handed to something the
+check cannot read — an imported or remote function — makes the test opaque, and an opaque test
+suppresses the report rather than risking a false positive.
 
-Fix by removing the key from the setup's return map *after* confirming nothing reads it, or by
-moving its construction to the tests that need it.
+The issue points at the binding line, not at `setup do` — that is the line to delete. A key whose
+variable the setup also uses for something else is not reported, since removing it would delete
+nothing.
+
+Fix by deleting the binding *and* its key, *after* confirming nothing reads it — or by moving the
+construction to the tests that need it. Dropping only the key is not a fix: the work still runs, and
+you will silence the compiler warning it now raises by renaming to `_company`.
 
 ### `UnusedSetupKeysPerTest` (design, test files)
 

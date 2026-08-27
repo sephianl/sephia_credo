@@ -1,32 +1,30 @@
 defmodule SephiaCredo.Checks.UnusedSetupKeysInTests do
-  @moduledoc """
-  Flags any `setup` return key that is not consumed by some test in
-  its scope.
-
-  - A module-level `setup` is in scope for every test in the module
-    (whether the test lives at module level or inside a `describe`).
-  - A `describe`-local `setup` is in scope for the tests inside that
-    describe only.
-
-  A test consumes a key by destructuring it, by reading it off its context
-  binding (`ctx.key`), or by handing that context to a helper in the same file
-  that does either. A test that hands its context to something unresolvable —
-  an imported or remote function — is left alone, since its key use cannot be
-  known.
-
-  Setups returning `%{...}` or `{:ok, %{...}}` are both supported.
-  Underscore-prefixed bindings (`%{foo: _foo}`) do not count as use.
-  """
-
   use Credo.Check,
     base_priority: :low,
-    category: :design
+    category: :design,
+    explanations: [
+      check: """
+      Every key a `setup` returns is built for every test in its scope, and
+      the return map counts as a use, so the compiler cannot warn when no test
+      reads it.
+
+          setup do
+            company = insert(:company)
+            %{company: company}
+          end
+
+      If no test reads `:company`, that row is inserted for every test and
+      thrown away. Delete the binding and its key together — dropping only the
+      key leaves the work running.
+      """
+    ]
 
   alias SephiaCredo.TestContext
+  alias SephiaCredo.TestFile
 
   @impl true
-  def run(%Credo.SourceFile{filename: filename} = source_file, params \\ []) do
-    if String.ends_with?(filename, "_test.exs") do
+  def run(source_file, params \\ []) do
+    if TestFile.test_file?(source_file) do
       issue_meta = IssueMeta.for(source_file, params)
 
       case Credo.Code.ast(source_file) do
@@ -55,7 +53,14 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTests do
       |> Enum.uniq()
 
     module_issues =
-      check_unused(module_setup_keys, all_used_keys, all_tests, module_setup_line, issue_meta)
+      check_unused(
+        module_setup_keys,
+        all_used_keys,
+        all_tests,
+        module_setup_line,
+        module_body,
+        issue_meta
+      )
 
     describe_issues =
       Enum.flat_map(describes, fn body ->
@@ -63,34 +68,44 @@ defmodule SephiaCredo.Checks.UnusedSetupKeysInTests do
         tests = TestContext.tests(body, helpers)
         used = tests |> Enum.flat_map(& &1.keys) |> Enum.uniq()
 
-        check_unused(keys, used, tests, line, issue_meta)
+        check_unused(keys, used, tests, line, body, issue_meta)
       end)
 
     module_issues ++ describe_issues
   end
 
-  defp check_unused([], _used, _tests, _line, _issue_meta), do: []
+  defp check_unused([], _used, _tests, _line, _body, _issue_meta), do: []
 
-  defp check_unused(setup_keys, used_keys, tests, setup_line, issue_meta) do
-    if Enum.any?(tests, & &1.opaque?),
-      do: [],
-      else: unused_issue(setup_keys -- used_keys, setup_line, issue_meta)
+  defp check_unused(setup_keys, used_keys, tests, setup_line, body, issue_meta) do
+    if Enum.any?(tests, & &1.opaque?) do
+      []
+    else
+      body
+      |> TestContext.dead_setup_keys(setup_keys -- used_keys)
+      |> Enum.map(&dead_issue(&1, setup_line, issue_meta))
+    end
   end
 
-  defp unused_issue([], _setup_line, _issue_meta), do: []
+  defp dead_issue({key, nil, _line}, setup_line, issue_meta) do
+    format_issue(
+      issue_meta,
+      message:
+        "Setup returns `:#{key}` but no test in scope uses it, so every test " <>
+          "pays to build it. Remove it from the setup return map.",
+      trigger: ":#{key}",
+      line_no: setup_line
+    )
+  end
 
-  defp unused_issue(unused, setup_line, issue_meta) do
-    unused_str = Enum.map_join(unused, ", ", &":#{&1}")
-
-    [
-      format_issue(
-        issue_meta,
-        message:
-          "Setup returns keys never used by any test: #{unused_str}. " <>
-            "Remove from the setup return map.",
-        trigger: "setup",
-        line_no: setup_line
-      )
-    ]
+  defp dead_issue({key, var, line}, _setup_line, issue_meta) do
+    format_issue(
+      issue_meta,
+      message:
+        "`#{var}` is built for every test in scope, but no test uses `:#{key}`, " <>
+          "so its result is thrown away. The compiler cannot warn about this — " <>
+          "the setup return map counts as a use. Delete the binding and its key.",
+      trigger: ":#{key}",
+      line_no: line
+    )
   end
 end

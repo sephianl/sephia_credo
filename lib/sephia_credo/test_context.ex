@@ -3,12 +3,15 @@ defmodule SephiaCredo.TestContext do
   Shared reading of a test module's AST for the `setup`-key checks: what a
   `setup` returns, and which of those keys each test consumes.
 
-  A test consumes a key by destructuring it, by reading it off its context
-  binding (`ctx.key`), or by handing that context to a helper defined in the
-  same file that does either. Calls this module cannot resolve — remote or
-  imported — make the test opaque, and an opaque test consumes every key in
-  scope, since the alternative is a false positive on the whole fixture.
+  A test consumes a key by destructuring it — in its head or anywhere in its
+  body — by reading it off its context binding (`ctx.key`), or by handing that
+  context to a helper defined in the same file that does either. Calls this
+  module cannot resolve — remote or imported — make the test opaque, and an
+  opaque test consumes every key in scope, since the alternative is a false
+  positive on the whole fixture.
   """
+
+  alias SephiaCredo.Ast
 
   @special_forms [
     :.,
@@ -95,6 +98,111 @@ defmodule SephiaCredo.TestContext do
 
   @doc "The context keys a pattern destructures, ignoring underscored bindings."
   def match_keys(node), do: match_keys(node, [])
+
+  @doc """
+  Of `candidates` — keys the `setup` in `body` returns that no test uses — those
+  whose construction is dead code, as `{key, variable, line}`.
+
+  A key bound to a variable the setup uses for anything else is dropped: that
+  binding runs whatever the return map says, so there is nothing to delete. What
+  remains is resolved to a fixpoint, since dropping one key can strand the
+  binding that fed it. `variable` and `line` are `nil` unless the key's value is
+  a bare variable bound in the setup itself.
+  """
+  def dead_setup_keys(_body, []), do: []
+
+  def dead_setup_keys(body, candidates) do
+    {statements, returned} = body |> setup_body() |> split_setup()
+    pairs = return_pairs(returned)
+    vars = Map.new(candidates, &{&1, bare_var(Map.get(pairs, &1))})
+    dead = settle(MapSet.new(candidates), vars, statements)
+
+    candidates
+    |> Enum.filter(&MapSet.member?(dead, &1))
+    |> Enum.map(&resolve_binding(&1, vars, statements))
+  end
+
+  defp resolve_binding(key, vars, statements) do
+    with var when not is_nil(var) <- vars[key],
+         line when not is_nil(line) <- binding_line(statements, var) do
+      {key, var, line}
+    else
+      _ -> {key, nil, nil}
+    end
+  end
+
+  # Shrinks by removing any key whose variable something still live reads. The
+  # bindings of keys already slated for removal do not count as live, so a chain
+  # that is dead end to end collapses in full rather than one layer per run.
+  defp settle(dead, vars, statements) do
+    dropped = dead |> Enum.map(&vars[&1]) |> Enum.reject(&is_nil/1) |> MapSet.new()
+    live = live_var_uses(statements, dropped)
+    next = MapSet.new(Enum.reject(dead, &(vars[&1] && MapSet.member?(live, vars[&1]))))
+
+    if MapSet.equal?(next, dead), do: dead, else: settle(next, vars, statements)
+  end
+
+  defp live_var_uses(statements, dropped) do
+    statements
+    |> Enum.reject(&binds_dropped?(&1, dropped))
+    |> Enum.reduce(MapSet.new(), &MapSet.union(var_uses(&1), &2))
+  end
+
+  defp binds_dropped?({:=, _, [{name, _, ctx}, _value]}, dropped)
+       when is_atom(name) and is_atom(ctx),
+       do: MapSet.member?(dropped, name)
+
+  defp binds_dropped?(_statement, _dropped), do: false
+
+  # A binding's own left-hand side is not a use of it, so only the value is read.
+  defp var_uses({:=, _, [_pattern, value]}), do: var_uses(value)
+
+  defp var_uses({name, _meta, ctx}) when is_atom(name) and is_atom(ctx),
+    do: MapSet.new([name])
+
+  defp var_uses({fun, _meta, args}) when is_list(args),
+    do: Enum.reduce(args, var_uses(fun), &MapSet.union(var_uses(&1), &2))
+
+  defp var_uses({left, right}), do: MapSet.union(var_uses(left), var_uses(right))
+
+  defp var_uses(list) when is_list(list),
+    do: Enum.reduce(list, MapSet.new(), &MapSet.union(var_uses(&1), &2))
+
+  defp var_uses(_other), do: MapSet.new()
+
+  defp binding_line(statements, var) do
+    Enum.find_value(statements, fn
+      {:=, meta, [{^var, _, ctx}, _value]} when is_atom(ctx) -> meta[:line]
+      _ -> nil
+    end)
+  end
+
+  defp setup_body(nil), do: nil
+  defp setup_body({:__block__, _, statements}), do: setup_body_from_list(statements)
+  defp setup_body(statement), do: setup_body_from_list(List.wrap(statement))
+
+  defp setup_body_from_list(statements) do
+    Enum.find_value(statements, fn
+      {:setup, _meta, [body]} -> unwrap_do(body)
+      {:setup, _meta, [_context_match, body]} -> unwrap_do(body)
+      _ -> nil
+    end)
+  end
+
+  defp split_setup({:__block__, _, [_ | _] = statements}),
+    do: {Enum.drop(statements, -1), List.last(statements)}
+
+  defp split_setup(single), do: {[], single}
+
+  defp return_pairs({:%{}, _, pairs}),
+    do: Map.new(for {key, value} <- pairs, is_atom(key), do: {key, value})
+
+  defp return_pairs({:ok, map}), do: return_pairs(map)
+  defp return_pairs({:{}, _, [:ok, map]}), do: return_pairs(map)
+  defp return_pairs(_other), do: %{}
+
+  defp bare_var({name, _meta, ctx}) when is_atom(name) and is_atom(ctx), do: name
+  defp bare_var(_other), do: nil
 
   defp put_helper(acc, {:when, _, [head | _guards]}, body), do: put_helper(acc, head, body)
 
@@ -208,17 +316,21 @@ defmodule SephiaCredo.TestContext do
   defp context_uses(_body, [], _helpers, _visited), do: {[], false}
 
   defp context_uses(body, bindings, helpers, visited) do
-    body = unpipe(body)
+    body = Ast.unpipe(body)
+    tainted = taint(body, MapSet.new(bindings))
 
     body
-    |> collect_uses(taint(body, MapSet.new(bindings)), helpers, visited)
-    |> then(fn {keys, opaque?} -> {Enum.uniq(keys), opaque?} end)
+    |> collect_uses(tainted, helpers, visited)
+    |> then(fn {keys, opaque?} ->
+      {Enum.uniq(destructured_keys(body, tainted) ++ keys), opaque?}
+    end)
   end
 
-  defp unpipe(ast) do
-    Macro.prewalk(ast, fn
-      {:|>, _, [left, {fun, meta, args}]} when is_list(args) -> {fun, meta, [left | args]}
-      node -> node
+  defp destructured_keys(body, tainted) do
+    body
+    |> assignments()
+    |> Enum.flat_map(fn {pattern, value} ->
+      if references?(value, tainted), do: match_keys(pattern), else: []
     end)
   end
 

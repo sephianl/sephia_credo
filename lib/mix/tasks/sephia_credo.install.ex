@@ -22,9 +22,16 @@ if Code.ensure_loaded?(Igniter) do
       "{SephiaCredo.Checks.AppendInLoop, []}",
       "{SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []}",
       "{SephiaCredo.Checks.AssertWithoutAssertion, []}",
+      "{SephiaCredo.Checks.EnumAtInLoop, []}",
+      "{SephiaCredo.Checks.KeywordBagParameter, []}",
+      "{SephiaCredo.Checks.MapAsSet, []}",
+      "{SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []}",
+      "{SephiaCredo.Checks.PatternMatchInFunctionHead, []}",
+      "{SephiaCredo.Checks.PreloadInLoop, []}",
       "{SephiaCredo.Checks.ProcessSleepInTests, []}",
       "{SephiaCredo.Checks.RawRuntimeError, []}",
       "{SephiaCredo.Checks.StructComparisonOperator, []}",
+      "{SephiaCredo.Checks.TrivialWrapperFunction, []}",
       "{SephiaCredo.Checks.UnusedSetupKeysInTests, []}",
       "{SephiaCredo.Checks.UnusedSetupKeysPerTest, []}"
     ]
@@ -93,9 +100,16 @@ if Code.ensure_loaded?(Igniter) do
                 {SephiaCredo.Checks.AppendInLoop, []},
                 {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
                 {SephiaCredo.Checks.AssertWithoutAssertion, []},
+                {SephiaCredo.Checks.EnumAtInLoop, []},
+                {SephiaCredo.Checks.KeywordBagParameter, []},
+                {SephiaCredo.Checks.MapAsSet, []},
+                {SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []},
+                {SephiaCredo.Checks.PatternMatchInFunctionHead, []},
+                {SephiaCredo.Checks.PreloadInLoop, []},
                 {SephiaCredo.Checks.ProcessSleepInTests, []},
                 {SephiaCredo.Checks.RawRuntimeError, []},
                 {SephiaCredo.Checks.StructComparisonOperator, []},
+                {SephiaCredo.Checks.TrivialWrapperFunction, []},
                 {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
                 {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
               ]

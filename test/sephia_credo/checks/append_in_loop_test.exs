@@ -363,6 +363,217 @@ defmodule SephiaCredo.Checks.AppendInLoopTest do
     end
   end
 
+  describe "accumulator on the right (no issues)" do
+    test "does not flag prepending a bounded list onto the accumulator" do
+      """
+      defmodule Sample do
+        def run(list) do
+          Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
+            case build(item) do
+              {:ok, finalized} -> {:cont, {:ok, finalized ++ acc}}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag a loop-invariant list built for a call" do
+      """
+      defmodule Sample do
+        def run(stops, opts) do
+          Enum.reduce(stops, [], fn stop, acc ->
+            unassign(stop, opts ++ [authorize?: false])
+            [stop | acc]
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag a function result concatenated onto the accumulator" do
+      """
+      defmodule Sample do
+        def run(list) do
+          Enum.reduce(list, [], fn item, acc ->
+            List.wrap(item) ++ acc
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag a divide-and-conquer join in a recursive function" do
+      """
+      defmodule Sample do
+        def simplify(points, a, b, eps) do
+          {imax, dmax} = farthest(points, a, b)
+
+          if dmax > eps and imax do
+            right_pts = Enum.drop(points, imax)
+            split = hd(right_pts)
+            left = points |> Enum.take(imax + 1) |> simplify(a, split, eps)
+            right = simplify(right_pts, split, b, eps)
+            left ++ tl(right)
+          else
+            [a, b]
+          end
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag a fold that feeds the accumulator back in" do
+      """
+      defmodule Sample do
+        def run(checks, route) do
+          Enum.reduce(checks, [], fn check, acc ->
+            acc ++ check.analyze(route, acc, [])
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag a guarded reducer clause appending a non-accumulator" do
+      """
+      defmodule Sample do
+        def run(statements) do
+          Enum.reduce(statements, [], fn
+            {kind, _, [head | _rest]}, pairs when kind in [:def, :defp] ->
+              pair(head) ++ pairs
+
+            _statement, pairs ->
+              pairs
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "still flags a guarded reducer clause appending to the accumulator" do
+      """
+      defmodule Sample do
+        def run(items) do
+          Enum.reduce(items, [], fn item, acc when is_binary(item) ->
+            acc ++ [item]
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> assert_issue()
+    end
+
+    test "does not flag a variable destructured out of a recursive parameter" do
+      """
+      defmodule Sample do
+        defp generate([{:label, t, _} | parsecs], mod, acc) do
+          generate(t ++ parsecs, mod, acc)
+        end
+
+        defp generate([], _mod, acc), do: acc
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "still flags a whole recursive parameter that grows" do
+      """
+      defmodule Sample do
+        defp walk([h | t], acc), do: walk(t, acc ++ [h])
+        defp walk([], acc), do: acc
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> assert_issue()
+    end
+
+    test "does not flag the bounded half of a destructured reducer result" do
+      """
+      defmodule Sample do
+        def run(results, stats) do
+          Enum.reduce(results, {[], stats}, fn result, {works, acc} ->
+            {work, acc} = collect(result, acc)
+            {work ++ works, acc}
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+  end
+
+  describe "capture accumulators" do
+    test "does not flag a capture that never receives the accumulator" do
+      """
+      defmodule Sample do
+        def run(list) do
+          Enum.reduce(list, [], fn group, acc ->
+            [Enum.map(group, &(&1 ++ [:tag])) | acc]
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "does not flag `&1 ++ &2` in a reducer capture, where `&1` is the element" do
+      """
+      defmodule Sample do
+        def run(list) do
+          Enum.reduce(list, [], &(&1 ++ &2))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> refute_issues()
+    end
+
+    test "flags `&1 ++ [item]` inside a loop" do
+      """
+      defmodule Sample do
+        def run(list) do
+          Enum.reduce(list, %{}, fn {key, item}, acc ->
+            Map.update(acc, key, [item], &(&1 ++ [item]))
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AppendInLoop)
+      |> assert_issue()
+    end
+  end
+
   describe "multiple issues" do
     test "flags multiple ++ in the same reduce" do
       """

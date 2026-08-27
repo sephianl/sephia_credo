@@ -1,49 +1,33 @@
 defmodule SephiaCredo.Checks.StructComparisonOperator do
-  @moduledoc """
-  Forbid using `<`, `>`, `<=`, `>=`, `==`, `!=` to compare struct values
-  from modules that define their own `compare/2`.
-
-  Elixir's comparison operators use Erlang's term order on structs, which
-  walks fields in declaration order. For most calendar / numeric structs
-  this produces silently incorrect results. Examples:
-
-    * `Decimal.new("1.0") == Decimal.new("1.00")` returns `false` — different
-      `coef`/`exp` even though mathematically equal.
-    * `Decimal.new("1.5") > Decimal.new("2")` returns `true` — Erlang
-      compares the `coef` field (15 vs 2) before the `exp` field.
-    * `~T[09:00:00]` vs `~T[10:00:00]` happens to work, but mixing structs
-      built different ways does not.
-
-  Prefer the module's own `compare/2` (or `eq?/2` for Decimal):
-
-      Date.compare(a, b) == :lt
-      DateTime.compare(a, b) in [:gt, :eq]
-      Decimal.compare(a, b) == :eq
-      Version.compare(a, b)
-
-  ## Tracked modules
-
-  Built-in: `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Decimal`, `Version`.
-
-  Add more via the `extra_modules` config (accepts atoms, lists of atoms,
-  or strings — see params).
-
-  ## Asymmetry between operators
-
-  For `<`, `>`, `<=`, `>=`: one detectable side is enough to flag — the
-  operator is only meaningful for ordered structs anyway.
-
-  For `==`, `!=`: both sides must be detectable struct values. This avoids
-  false-positives on common patterns like `record.field == ~U[...]` where
-  the LHS could be `nil` or any other value.
-  """
-
   use Credo.Check,
     base_priority: :high,
     category: :warning,
     param_defaults: [
       extra_modules: []
+    ],
+    explanations: [
+      check: """
+      Comparison operators use Erlang term order on structs, which walks the
+      fields in declaration order rather than comparing values.
+
+          Decimal.new("1.0") == Decimal.new("1.00")   # false
+          Decimal.new("1.5") > Decimal.new("2")       # true
+
+      Use the module's own `compare/2` (or `Decimal.eq?/2`):
+
+          Date.compare(a, b) == :lt
+          DateTime.compare(a, b) in [:gt, :eq]
+
+      Covers `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Decimal` and
+      `Version`; add your own with `extra_modules`.
+      """,
+      params: [
+        extra_modules:
+          "Further struct modules to track, as atoms or strings — `[Money, \"Cldr.Unit\"]`."
+      ]
     ]
+
+  alias Credo.Check.Params
 
   @ops [:<, :>, :<=, :>=, :==, :!=]
 
@@ -61,7 +45,7 @@ defmodule SephiaCredo.Checks.StructComparisonOperator do
   @impl true
   def run(source_file, params \\ []) do
     issue_meta = IssueMeta.for(source_file, params)
-    extra = params[:extra_modules] || []
+    extra = Params.get(params, :extra_modules, __MODULE__)
     modules = @builtin_modules ++ Enum.map(extra, &normalize_module/1)
 
     case Credo.Code.ast(source_file) do
