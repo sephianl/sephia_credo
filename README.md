@@ -50,6 +50,7 @@ mix deps.get
           {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
           {SephiaCredo.Checks.AssertWithoutAssertion, []},
           {SephiaCredo.Checks.EnumAtInLoop, []},
+          {SephiaCredo.Checks.GenericModuleName, []},
           {SephiaCredo.Checks.KeywordBagParameter, []},
           {SephiaCredo.Checks.MapAsSet, []},
           {SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []},
@@ -57,6 +58,7 @@ mix deps.get
           {SephiaCredo.Checks.PreloadInLoop, []},
           {SephiaCredo.Checks.ProcessSleepInTests, []},
           {SephiaCredo.Checks.RawRuntimeError, []},
+          {SephiaCredo.Checks.RepoInAshResource, []},
           {SephiaCredo.Checks.StructComparisonOperator, []},
           {SephiaCredo.Checks.TrivialWrapperFunction, []},
           {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
@@ -72,9 +74,11 @@ mix deps.get
 
 ## Upgrading from 0.3
 
+0.4.0 was tagged but never published to Hex, so 0.3.0 is the previous release on Hex and this section covers both 0.4 and 0.5.
+
 `UnusedSetupKeysInTests` now reports on the **binding line** inside the `setup` block — the line to delete — instead of once on the `setup do` line. A `# credo:disable-for-next-line SephiaCredo.Checks.UnusedSetupKeysInTests` comment sitting above `setup do` therefore suppresses nothing any more, and the issues it was hiding will reappear. Move the comment down to the binding it covers, or switch that file to `# credo:disable-for-this-file`.
 
-Seven checks are new and enabled by default in the generated config — `EnumAtInLoop`, `KeywordBagParameter`, `MapAsSet`, `MultiStepMutationWithoutTransaction`, `PatternMatchInFunctionHead`, `PreloadInLoop`, `TrivialWrapperFunction`. Adding them to an existing `.credo.exs` is opt-in; nothing changes until you do. `MultiStepMutationWithoutTransaction` sees Ash code-interface calls only once you list your resource modules in `ash_resources:`.
+Nine checks are new and enabled by default in the generated config — `EnumAtInLoop`, `GenericModuleName`, `KeywordBagParameter`, `MapAsSet`, `MultiStepMutationWithoutTransaction`, `PatternMatchInFunctionHead`, `PreloadInLoop`, `RepoInAshResource`, `TrivialWrapperFunction`. Adding them to an existing `.credo.exs` is opt-in; nothing changes until you do. `MultiStepMutationWithoutTransaction` sees Ash code-interface calls only once you list your resource modules in `ash_resources:`, and `GenericModuleName` ships at `:low` priority so it surfaces only under `mix credo --strict`.
 
 ## Upgrading from 0.2
 
@@ -94,6 +98,7 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `AshCodeInterfaceReadWithArgs` | Warning | Flags `define :name, action: :read, args: [...]` inside `code_interface` — Ash's generic `:read` action raises at runtime when called with args |
 | `AssertWithoutAssertion` | Warning | Flags `assert pattern = expr` in tests where the bound variables are never used — the match succeeds vacuously |
 | `EnumAtInLoop` | Refactor | Flags `Enum.at` with a computed or negative index inside a loop — O(n) per element, so O(n²) overall |
+| `GenericModuleName` | Readability *(`:low`)* | Flags a `defmodule` whose final segment says nothing at the point of use — `Result`, `Helper`, `…Implementation` |
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
 | `MultiStepMutationWithoutTransaction` | Warning | Flags a function performing 2+ database mutations outside a transaction — a mid-sequence failure leaves partial state |
@@ -101,6 +106,7 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `PreloadInLoop` | Warning | Flags `Repo.preload` / `Ash.load` inside `Enum.*`, `Stream.*`, `Task.async_stream` or `for` — one query per element (N+1) |
 | `ProcessSleepInTests` | Refactor | Flags `Process.sleep` in `*_test.exs` files — causes flakes and slows the suite |
 | `RawRuntimeError` | Warning | Flags `raise "msg"` and `raise RuntimeError, ...` — error trackers can't group these meaningfully |
+| `RepoInAshResource` | Warning | Flags a statement-executing `Repo` call inside an Ash resource, change, validation, calculation or preparation — no tenant scoping, no notifications, no authorization |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
 | `TrivialWrapperFunction` | Refactor | Flags a single-clause `defp` that only forwards its arguments to another module |
@@ -128,6 +134,18 @@ Inside an Ash `code_interface do ... end` block, `define :name, action: :read, a
 A non-negative integer-literal index is not flagged: `Enum.at(list, 3)` takes at most four steps, bounded by the literal rather than by the length of the list. A negative literal *is* flagged — reaching `-1` means walking to the end, so it costs O(n) like any computed index. The fix is to take the element once before the loop; swapping in `List.last/1` is the same walk and changes nothing. As with `PreloadInLoop`, only per-element regions are examined, so `Enum.at` in the collection a loop iterates over is not reported.
 
 Known limitation: the check cannot know how large a collection is, so `Enum.at` over a three-element list inside a loop is reported the same as a walk over a large matrix. Both are O(n²); only one is worth your time.
+
+### GenericModuleName
+
+A module name has to mean something where it is *referenced*, not only where it is defined. `Zelo.Planner.Mutations.ReorderStopsSolver.Result` reads fine nested; one `alias` later the call site says `Result.new(...)` and names nothing. Name the module for what it holds or does — `ReorderedRoute` — so the alias carries the meaning with it.
+
+`denylist` matches the final segment **whole**. Measured over a 2000-module codebase, matching those words as suffixes instead reported roughly forty modules, nearly all of them meaningful — `ScanResult`, `PlanJobInput`, `RouteInfo`, `ZoneData` all say what they are at the call site. A qualifier in front of a generic word usually rescues it. `suffix_denylist` is the exception and matches the end of the segment, because a role suffix is *not* rescued by a qualifier: `RoutingImplementation` names what a module is to the compiler rather than what it does.
+
+Matching is case-sensitive, so `Database` is not a `Base` and `Metadata` is not `Data`. Framework and ecosystem names are never reported — `Application`, `Supervisor`, `Registry`, `Endpoint`, `Router`, `Repo`, `Telemetry`, `Mailer`, `Gettext`, `ErrorHTML`, `ErrorJSON`, `Layouts`, `CoreComponents` — since there the convention carries the meaning and renaming would fight the tooling. `Credo.Check.Readability.ModuleNames` checks a different thing: that a name is PascalCase, not that it means anything.
+
+`denylist` replaces the default list; `extra_denylist` adds to it without restating it. Support modules under `test/` are best excluded with `files: %{excluded: [~r"/test/"]}` rather than by the check.
+
+Renaming a module touches every reference, so this check ships at `:low` priority — it surfaces under `mix credo --strict` and reports without failing a build.
 
 ### KeywordBagParameter
 
@@ -176,6 +194,27 @@ A sleep inside a bounded retry helper is exempt — a `def`/`defp` that calls it
 ### RawRuntimeError
 
 `raise "msg"` and `raise RuntimeError, ...` both lower to a `RuntimeError` exception. Error trackers (Appsignal, Sentry, etc.) group exceptions by module name — every distinct `RuntimeError` message becomes its own issue, hiding the signal in noise. Define a `defexception` module with a descriptive name and raise that instead.
+
+### RepoInAshResource
+
+Reaching for `Repo` from inside an Ash resource, change, validation, calculation, preparation or generic action goes around the framework that owns the data: no tenant scoping in the statement, no notifications, no authorization, and `updated_at` set by SQL rather than by Ash.
+
+The message names the Ash equivalent for the call it found, so the report comes with the fix attached:
+
+| Found | Message points at |
+|---|---|
+| `Repo.insert_all` | the resource's create action, or `Ash.bulk_create/4` |
+| `Repo.update_all` | `Ash.bulk_update/4`, or `Ash.update_many/4` when each row takes different values |
+| `Repo.delete_all` | the resource's destroy action, or `Ash.bulk_destroy/4` |
+| `Repo.query` / `query!`, `Ecto.Adapters.SQL.query/query!` | the resource's action; `Ash.update_many/4` for a per-row bulk write |
+
+The "raw SQL is faster for bulk writes" defence usually costs one statement either way — `Ash.update_many/4` compiles to a single `MERGE` when every change is atomic.
+
+A `Repo.query` is exempt only when the statement is a literal that is *provably* a read: it begins with `SELECT` or `WITH` and mentions no `INSERT`, `UPDATE` or `DELETE`. A PostGIS geometry transform touches no table and leaks no tenant, so reporting it would be a report with no fix behind it.
+
+SQL assembled at runtime is **not** exempt. Being unable to read a statement is not evidence that it is a read, and staying quiet there would miss a dynamically built `UPDATE` — exactly the case this check exists to catch. `Repo.transaction/1` and `Repo.rollback/1` execute no statement of their own and are never reported.
+
+Any alias whose last segment is `Repo` matches. `extra_resource_modules` names project wrappers that themselves `use Ash.Resource` — without it the check is silent in a codebase where resources say `use MyApp.Resource`.
 
 ### StructComparisonOperator
 

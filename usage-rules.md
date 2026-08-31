@@ -103,6 +103,24 @@ reported: reaching `-1` walks to the end. Hoist it — the enumerable does not c
 three-element config list is reported exactly like a walk over a large matrix. Both are O(n²); only
 one is worth changing. If it is small and fixed, silence the line rather than restructuring.
 
+### `GenericModuleName` (readability, `:low` priority)
+
+Flags a `defmodule` whose final name segment carries no meaning at the point of use — `Result`,
+`Data`, `Helper`, `Utils`, `Manager`, and role suffixes like `…Implementation`. The name reads fine
+fully qualified; one `alias` later the call site says `Result` and names nothing.
+
+Fix by renaming the module for what it holds or does. That touches every reference, which is why
+this ships at `:low` priority and only surfaces under `mix credo --strict` — it is a backlog item,
+not a build failure.
+
+**Do not silence it by nesting differently.** The path is context, never the name; the report is
+about what the call site reads after the `alias`.
+
+Framework and ecosystem names (`Application`, `Supervisor`, `Endpoint`, `Router`, `Repo`, …) are
+never reported — renaming those fights the tooling. Matching is case-sensitive and whole-segment,
+so `Database` and `Metadata` are not reported. If a generic word is genuinely right for a module,
+`denylist` replaces the default list and `extra_denylist` adds to it.
+
 ### `KeywordBagParameter` (refactor)
 
 Flags a parameter the body only reaches into with `Keyword.get/fetch/fetch!/take/has_key?`. Reading
@@ -182,6 +200,33 @@ Flags `raise "msg"` and `raise RuntimeError, ...`. Error trackers group by excep
 every distinct message becomes its own issue and the signal disappears.
 
 Fix with a `defexception` module named for the failure.
+
+### `RepoInAshResource` (warning)
+
+Flags a statement-executing `Repo` call inside a module that uses `Ash.Resource`,
+`Ash.Resource.Change`, `Validation`, `Calculation`, `Preparation` or `Actions.Implementation`. The
+statement carries no tenant scoping, publishes no notifications, skips authorization, and sets
+`updated_at` from SQL.
+
+Fix by going through the resource's action. The message names the Ash equivalent for the call it
+found — `Ash.bulk_create/4` for `insert_all`, `Ash.bulk_update/4` or `Ash.update_many/4` for
+`update_all`, `Ash.bulk_destroy/4` for `delete_all`. For a per-row bulk write `Ash.update_many/4`
+compiles to a single `MERGE` when every change is atomic, so reaching for raw SQL to save a round
+trip usually saves nothing.
+
+Reported functions are `query`, `query!`, `insert_all`, `update_all`, `delete_all` and
+`Ecto.Adapters.SQL.query/query!`. A `query` is exempt only when its SQL is a literal that is
+provably a read — begins with `SELECT` or `WITH`, mentions no `INSERT`/`UPDATE`/`DELETE`.
+
+**Runtime-assembled SQL is reported.** If the report points at a `Repo.query!(sql, ...)` whose
+statement is genuinely a read, that is the one case worth silencing with a
+`# credo:disable-for-next-line` and a comment saying why — do not rewrite a working read to satisfy
+it. The check cannot see the statement, and treating unreadable as safe would miss a built `UPDATE`.
+
+`transaction`/`rollback` execute no statement of their own and are never reported.
+
+Set `extra_resource_modules` if your resources say `use MyApp.Resource` rather than
+`use Ash.Resource`. Without it the check has nothing to match and reports nothing at all.
 
 ### `StructComparisonOperator` (warning)
 

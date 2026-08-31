@@ -1,7 +1,7 @@
 defmodule SephiaCredo.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
   @description "Credo checks for common Elixir pitfalls"
   @github_url "https://github.com/sephianl/sephia_credo"
 
