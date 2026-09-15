@@ -223,4 +223,143 @@ defmodule SephiaCredo.Checks.ShadowedAliasTest do
       |> refute_issues()
     end
   end
+
+  describe "scopes narrower than the module" do
+    test "accepts the same final segment aliased in two function bodies" do
+      ~S"""
+      defmodule Sample do
+        def a do
+          alias A.Delete
+          Delete.go()
+        end
+
+        def b do
+          alias B.Delete
+          Delete.go()
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> refute_issues()
+    end
+
+    test "accepts an alias inside quote shadowing one in the defining module" do
+      ~S"""
+      defmodule Sample do
+        alias A.Delete
+
+        defmacro __using__(_opts) do
+          quote do
+            alias B.Delete
+          end
+        end
+
+        def go, do: Delete.go()
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> refute_issues()
+    end
+
+    test "accepts the same final segment aliased in two defimpl blocks" do
+      ~S"""
+      defmodule Sample do
+        defimpl Inspect, for: A do
+          alias A.Delete
+          def inspect(_term, _opts), do: Delete.label()
+        end
+
+        defimpl Inspect, for: B do
+          alias B.Delete
+          def inspect(_term, _opts), do: Delete.label()
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> refute_issues()
+    end
+
+    test "accepts the same final segment aliased in two case branches" do
+      ~S"""
+      defmodule Sample do
+        def go(x) do
+          case x do
+            :a ->
+              alias A.Delete
+              Delete.go()
+
+            :b ->
+              alias B.Delete
+              Delete.go()
+          end
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> refute_issues()
+    end
+
+    test "flags a collision inside one function body" do
+      ~S"""
+      defmodule Sample do
+        def go do
+          alias A.Delete
+          alias B.Delete
+          Delete.go()
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == "Delete"
+        assert issue.message =~ "A.Delete and B.Delete"
+      end)
+    end
+  end
+
+  describe "aliases carrying options" do
+    test "flags a collision where one side carries warn: false" do
+      ~S"""
+      defmodule Sample do
+        alias A.Delete, warn: false
+        alias B.Delete
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == "Delete"
+        assert issue.message =~ "A.Delete and B.Delete"
+      end)
+    end
+
+    test "flags a collision introduced through a multi-alias carrying warn: false" do
+      ~S"""
+      defmodule Sample do
+        alias A.{Create, Delete}, warn: false
+        alias B.Delete
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> assert_issue(fn issue -> assert issue.trigger == "Delete" end)
+    end
+
+    test "accepts a collision resolved with :as alongside another option" do
+      ~S"""
+      defmodule Sample do
+        alias A.Delete, as: DeleteA, warn: false
+        alias B.Delete
+      end
+      """
+      |> to_source_file()
+      |> run_check(ShadowedAlias)
+      |> refute_issues()
+    end
+  end
 end

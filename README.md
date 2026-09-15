@@ -216,6 +216,8 @@ Distinct full names guarantee nothing, because an alias resolves to its final se
 
 Fix it at the alias with `:as`, not at the call site. An explicit `:as` is never reported even when it collides — that spelling is a deliberate choice a reader can see. Only the implicit final segment is.
 
+Scope is read the way `alias` itself is scoped, so only two aliases that reach the same code collide. Sibling modules in one file may each alias a different `Delete`, and so may two function bodies, two `case` branches, or a `quote` and the module defining it — an alias a `__using__` injects lands in the caller's scope, not in the macro's own.
+
 ### StructComparisonOperator
 
 Elixir's comparison operators (`<`, `>`, `==`, etc.) use Erlang's term order on structs, which walks fields in declaration order. For most calendar/numeric structs this produces silently incorrect results — for example, `Decimal.new("1.0") == Decimal.new("1.00")` returns `false`, and `Decimal.new("1.5") > Decimal.new("2")` returns `true`. This check enforces the use of `Date.compare/2`, `DateTime.compare/2`, `Decimal.compare/2`, `Version.compare/2`, etc. instead. Built-in coverage: `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Decimal`, `Version`. Configurable via `extra_modules`.
@@ -240,7 +242,9 @@ A staged refactor breaks it the other way too: when one rename is split across s
 
 A reference resolves if it matches any module in the project or in a dependency, **by suffix** — `ModelBuilder.Clients` resolves to `Zelo.Planner.Exvrp.ModelBuilder.Clients` the way a reader resolves it, because that is how the `alias` at the top of the file reads. A nested module resolves under its full name, so a `defmodule Params` inside `ExVrp.PenaltyManager` answers to `ExVrp.PenaltyManager.Params`. Modules `Mox.defmock/2` creates are collected too, including when the mock name resolves through an alias in scope. A trailing `.function/2` is stripped before the name is looked up.
 
-Only backticked references are reported — an unquoted module name in a sentence is prose and is left alone. `ignore` is for the names that look like references and are not: process names registered at runtime, the occasional capitalised prose word, SQL keywords in a query doc. Prefer fixing a reference over ignoring it — that list is for things that were never modules, not for links that rotted.
+Only backticked references are reported — an unquoted module name in a sentence is prose and is left alone. So is a bare word spelled like a proper noun: two capitals in a row are an acronym, which keeps `` `PostgreSQL` ``, `` `OpenAPI` `` and `` `GraphQL` `` out, and a short built-in vocabulary covers the ones shaped exactly like a module, such as `` `GitHub` `` and `` `TypeScript` ``. A dotted name or one carrying `fun/arity` is unambiguous and always reported.
+
+`ignore` is for the names that look like references and are not: process names registered at runtime, the occasional capitalised prose word, SQL keywords in a query doc. Entries may be strings or unquoted module names — `ignore: ["Zelo.TaskSupervisor"]` and `ignore: [Zelo.TaskSupervisor]` both work. Prefer fixing a reference over ignoring it — that list is for things that were never modules, not for links that rotted.
 
 ### UnusedSetupKeysInTests
 

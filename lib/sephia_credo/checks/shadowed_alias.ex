@@ -48,55 +48,62 @@ defmodule SephiaCredo.Checks.ShadowedAlias do
     end
   end
 
-  defp scopes({:defmodule, _meta, [_name, body]} = node) do
-    [own_aliases(node) | Enum.flat_map(nested(body), &scopes/1)]
+  # An alias reaches to the end of the innermost scope holding it, so a scope is
+  # the unit a collision happens in — two aliases in sibling scopes never shadow.
+  # `quote` counts because the alias it carries lands in the caller's scope
+  # rather than this one, and `->` because each clause of a `case`, `fn`,
+  # `receive` or `try` is a scope of its own.
+  @scope_forms ~w(
+    defmodule def defp defmacro defmacrop defimpl defprotocol
+    quote fn -> if unless case cond with for try receive
+  )a
+
+  defp scopes(ast) do
+    {own, nested} = partition(ast)
+
+    [own | Enum.flat_map(nested, &scopes/1)]
   end
 
-  defp scopes({_form, _meta, args}) when is_list(args), do: Enum.flat_map(args, &scopes/1)
-  defp scopes({left, right}), do: Enum.flat_map([left, right], &scopes/1)
-  defp scopes(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &scopes/1)
-  defp scopes(_node), do: []
+  # Splits one scope into the aliases written directly in it and the argument
+  # lists of the scopes nested inside it, which `scopes/1` then recurses on.
+  # Pruning at a boundary is what keeps a nested alias out of the outer scope.
+  defp partition(ast) do
+    {_ast, {aliases, nested}} = Macro.prewalk(ast, {[], []}, &partition_node/2)
 
-  defp nested(body) do
-    {_body, found} =
-      Macro.prewalk(body, [], fn
-        {:defmodule, _meta, _args} = node, acc -> {nil, [node | acc]}
-        node, acc -> {node, acc}
-      end)
-
-    found
+    {aliases, nested}
   end
 
-  defp own_aliases({:defmodule, _meta, [_name, body]}) do
-    body
-    |> strip_nested()
-    |> collect_aliases()
+  defp partition_node({form, _meta, args}, {aliases, nested})
+       when form in @scope_forms and is_list(args) do
+    {nil, {aliases, [args | nested]}}
   end
 
-  defp strip_nested(body) do
-    Macro.prewalk(body, fn
-      {:defmodule, _meta, _args} -> nil
-      node -> node
-    end)
+  defp partition_node({:alias, meta, [target | opts]} = node, {aliases, nested}) do
+    {node, {collect(target, opts, meta, aliases), nested}}
   end
 
-  defp collect_aliases(body) do
-    {_body, aliases} = Macro.prewalk(body, [], &alias_node/2)
-    aliases
+  defp partition_node(node, acc), do: {node, acc}
+
+  defp collect(target, opts, meta, aliases) do
+    if explicit_as?(opts), do: aliases, else: entries(target, meta, aliases)
   end
 
-  defp alias_node({:alias, _meta, [_target, [as: _as]]} = node, acc), do: {node, acc}
+  # Options other than `:as` — `warn: false` is the common one — say nothing
+  # about the name the alias binds, so only `:as` suppresses the entry.
+  defp explicit_as?([opts]) when is_list(opts),
+    do: Keyword.keyword?(opts) and Keyword.has_key?(opts, :as)
 
-  defp alias_node({:alias, meta, [{{:., _, [base, :{}]}, _, children}]} = node, acc) do
-    {node, Enum.reduce(children, acc, &[entry(join(base, &1), meta) | &2])}
+  defp explicit_as?(_opts), do: false
+
+  defp entries({{:., _, [base, :{}]}, _, children}, meta, aliases) do
+    Enum.reduce(children, aliases, &[entry(join(base, &1), meta) | &2])
   end
 
-  defp alias_node({:alias, meta, [{:__aliases__, _, segments}]} = node, acc)
-       when is_list(segments) do
-    {node, [entry(Enum.map(segments, &to_string/1), meta) | acc]}
+  defp entries({:__aliases__, _, segments}, meta, aliases) when is_list(segments) do
+    [entry(Enum.map(segments, &to_string/1), meta) | aliases]
   end
 
-  defp alias_node(node, acc), do: {node, acc}
+  defp entries(_target, _meta, aliases), do: aliases
 
   defp join({:__aliases__, _, base}, {:__aliases__, _, child}) do
     Enum.map(base ++ child, &to_string/1)

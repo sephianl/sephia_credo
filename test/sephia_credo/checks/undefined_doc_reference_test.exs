@@ -187,6 +187,39 @@ defmodule SephiaCredo.Checks.UndefinedDocReferenceTest do
       |> refute_issues()
     end
 
+    test "a name listed in ignore as an unquoted module" do
+      """
+      defmodule Zelo.Planner.Broadcaster do
+        @moduledoc "Broadcasts through `Zelo.TaskSupervisor`."
+      end
+      """
+      |> to_source_file()
+      |> run_check(UndefinedDocReference, ignore: [Zelo.TaskSupervisor])
+      |> refute_issues()
+    end
+
+    test "a proper noun whose capitals spell an acronym" do
+      """
+      defmodule Zelo.Planner.Store do
+        @moduledoc "Backed by `PostgreSQL`, described by `OpenAPI`, queried over `GraphQL`."
+      end
+      """
+      |> to_source_file()
+      |> run_check(UndefinedDocReference)
+      |> refute_issues()
+    end
+
+    test "a camel-cased proper noun with no structural tell" do
+      """
+      defmodule Zelo.Planner.Notes do
+        @moduledoc "Hosted on `GitHub`, typed with `TypeScript`, built on `JavaScript`."
+      end
+      """
+      |> to_source_file()
+      |> run_check(UndefinedDocReference)
+      |> refute_issues()
+    end
+
     test "an unquoted module name in prose" do
       """
       defmodule Zelo.Planner.Notes do

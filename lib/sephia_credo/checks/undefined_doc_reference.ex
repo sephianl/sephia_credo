@@ -51,6 +51,11 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
           are reported; `` `Cost` ``, `` `Duration` `` and `` `Parcels` `` are
           left alone, because a check cannot tell a one-word module from a
           one-word noun and the noun is the common case.
+        * a compound word spelled like a proper noun is prose too. Two capitals
+          in a row are an acronym — `` `PostgreSQL` ``, `` `OpenAPI` ``,
+          `` `GraphQL` `` — and a short vocabulary covers the ones with no tell
+          at all, such as `` `GitHub` `` and `` `TypeScript` ``, which are
+          shaped exactly like a module. Add your own to `ignore`.
 
       A dotted name or one carrying `fun/arity` is unambiguous and always
       reported. In practice that is where most of the rot is: the branch
@@ -78,6 +83,13 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
 
   @reference ~r/`([A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*)(\.[a-z_][A-Za-z0-9_?!]*\/\d+)?`/
 
+  @proper_nouns ~w(
+    GitHub GitLab BitBucket SourceHut
+    JavaScript TypeScript CoffeeScript PowerShell
+    YouTube LinkedIn WordPress SharePoint
+    DataDog PagerDuty CloudFlare CloudFront
+  )
+
   @impl true
   def run_on_all_source_files(exec, source_files, params) do
     known = known_names(source_files)
@@ -96,12 +108,22 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
   defp ignored_names(params) do
     params
     |> Params.get(:ignore, __MODULE__)
-    |> MapSet.new(&to_string/1)
+    |> MapSet.new(&name_of/1)
   end
 
+  # `ignore: [Zelo.TaskSupervisor]` is how every other entry in a `.credo.exs`
+  # is spelled, and `to_string/1` renders that atom `Elixir.Zelo.TaskSupervisor`,
+  # which no name scanned out of source can match.
+  defp name_of(name) when is_binary(name), do: name
+  defp name_of(name) when is_atom(name), do: inspect(name)
+
+  # `Credo.Code.ast/1` re-parses on every call, so this is a second pass over
+  # the whole tree on top of Credo's own per-file work. Credo runs its own
+  # `run_on_all` checks concurrently for the same reason.
   defp known_names(source_files) do
     source_files
-    |> Enum.flat_map(&defined_modules/1)
+    |> Task.async_stream(&defined_modules/1, ordered: false, timeout: :infinity)
+    |> Enum.flat_map(fn {:ok, names} -> names end)
     |> Enum.concat(dependency_modules())
     |> Enum.flat_map(&suffixes_of/1)
     |> MapSet.new()
@@ -239,11 +261,23 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
     not String.contains?(name, "_") and String.upcase(name) != name
   end
 
-  defp unambiguous?(name, nil), do: String.contains?(name, ".") or compound?(name)
-  defp unambiguous?(name, ""), do: String.contains?(name, ".") or compound?(name)
+  defp unambiguous?(name, nil), do: dotted?(name) or bare_module?(name)
+  defp unambiguous?(name, ""), do: dotted?(name) or bare_module?(name)
   defp unambiguous?(_name, _arity_suffix), do: true
 
+  defp dotted?(name), do: String.contains?(name, ".")
+
+  defp bare_module?(name), do: compound?(name) and not proper_noun?(name)
+
   defp compound?(name), do: length(Regex.scan(~r/[A-Z]/, name)) > 1
+
+  # A bare word is guessed at rather than resolved, so a spelling that reads as
+  # a proper noun is left to prose. Two capitals in a row are an acronym —
+  # `PostgreSQL`, `OpenAPI`, `GraphQL` — and the rest are told apart from a
+  # module only by being known, since `GitHub` and `BulkUpsert` are one shape.
+  defp proper_noun?(name), do: acronym?(name) or name in @proper_nouns
+
+  defp acronym?(name), do: Regex.match?(~r/[A-Z]{2}/, name)
 
   defp issue(reference, line_no, issue_meta) do
     format_issue(
