@@ -1,7 +1,7 @@
 defmodule SephiaCredo.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.6.0"
   @description "Credo checks for common Elixir pitfalls"
   @github_url "https://github.com/sephianl/sephia_credo"
 
@@ -49,7 +49,7 @@ defmodule SephiaCredo.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "usage-rules.md", "CHANGELOG.md"]
+      extras: ["README.md", "usage-rules.md", "CHANGELOG.md", "LICENSE"]
     ]
   end
 end

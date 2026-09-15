@@ -5,7 +5,7 @@ defmodule SephiaCredo do
   ## Included checks
 
   - `SephiaCredo.Checks.AppendInLoop` — flags O(n²) `++` inside loops
-  - `SephiaCredo.Checks.NoDateTimeOperatorCompare` — forbids `<`/`>`/`==`/`!=` on date/time values
+  - `SephiaCredo.Checks.StructComparisonOperator` — forbids `<`/`>`/`==`/`!=` on date/time values
   - `SephiaCredo.Checks.UnusedSetupKeysInTests` — flags setup keys never used by any test
   - `SephiaCredo.Checks.UnusedSetupKeysPerTest` — flags tests that don't consume all in-scope setup keys
 

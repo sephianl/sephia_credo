@@ -6,14 +6,21 @@ on:
     paths:
       - "mix.exs"
 
-permissions:
-  contents: write
-
 jobs:
-  release:
-    runs-on: self-hosted
+  # Split from the release job so the version guard runs without the publish
+  # credential in scope, and so the release job's steps need no `if:` of their own.
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check_tag.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tags are what the guard below reads; the default depth fetches none.
+          fetch-depth: 0
 
       - name: Get version
         id: version
@@ -24,15 +31,51 @@ jobs:
       - name: Check if tag already exists
         id: check_tag
         run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+  release:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    # GitHub-hosted rather than self-hosted, unlike ci.yml: this job holds
+    # HEX_API_KEY, and a persistent runner that also builds fork pull requests
+    # could be used to harvest it from a later privileged run. This job needs
+    # no project toolchain beyond Elixir, so it costs nothing to isolate.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.x"
+          elixir-version: "1.19.x"
+
+      - name: Get dependencies
+        run: mix deps.get
+
+      # A Hex version is permanent once the revert window closes, so the tree is
+      # verified here rather than trusting that ci.yml passed on the same commit.
+      - name: Verify
+        run: |
+          mix compile --warnings-as-errors
+          mix format --check-formatted
+          mix test
+
+      # Hex before tagging: a failed publish must not leave a tag and a GitHub
+      # release pointing at a version that never shipped, which is how v0.4.0
+      # and v0.5.0 ended up tagged but absent from Hex.
+      - name: Publish to Hex
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish --yes
+
       - name: Create release
-        if: steps.check_tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.check.outputs.version }}
           generate_release_notes: true

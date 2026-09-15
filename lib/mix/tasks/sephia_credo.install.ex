@@ -23,7 +23,6 @@ if Code.ensure_loaded?(Igniter) do
       "{SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []}",
       "{SephiaCredo.Checks.AssertWithoutAssertion, []}",
       "{SephiaCredo.Checks.EnumAtInLoop, []}",
-      "{SephiaCredo.Checks.GenericModuleName, []}",
       "{SephiaCredo.Checks.KeywordBagParameter, []}",
       "{SephiaCredo.Checks.MapAsSet, []}",
       "{SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []}",
@@ -32,10 +31,13 @@ if Code.ensure_loaded?(Igniter) do
       "{SephiaCredo.Checks.ProcessSleepInTests, []}",
       "{SephiaCredo.Checks.RawRuntimeError, []}",
       "{SephiaCredo.Checks.RepoInAshResource, []}",
+      "{SephiaCredo.Checks.ShadowedAlias, []}",
       "{SephiaCredo.Checks.StructComparisonOperator, []}",
       "{SephiaCredo.Checks.TrivialWrapperFunction, []}",
+      "{SephiaCredo.Checks.UndefinedDocReference, []}",
       "{SephiaCredo.Checks.UnusedSetupKeysInTests, []}",
-      "{SephiaCredo.Checks.UnusedSetupKeysPerTest, []}"
+      "{SephiaCredo.Checks.UnusedSetupKeysPerTest, []}",
+      "{SephiaCredo.Checks.UtcCalendarDate, []}"
     ]
 
     @impl Igniter.Mix.Task
@@ -103,7 +105,6 @@ if Code.ensure_loaded?(Igniter) do
                 {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
                 {SephiaCredo.Checks.AssertWithoutAssertion, []},
                 {SephiaCredo.Checks.EnumAtInLoop, []},
-                {SephiaCredo.Checks.GenericModuleName, []},
                 {SephiaCredo.Checks.KeywordBagParameter, []},
                 {SephiaCredo.Checks.MapAsSet, []},
                 {SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []},
@@ -112,10 +113,13 @@ if Code.ensure_loaded?(Igniter) do
                 {SephiaCredo.Checks.ProcessSleepInTests, []},
                 {SephiaCredo.Checks.RawRuntimeError, []},
                 {SephiaCredo.Checks.RepoInAshResource, []},
+                {SephiaCredo.Checks.ShadowedAlias, []},
                 {SephiaCredo.Checks.StructComparisonOperator, []},
                 {SephiaCredo.Checks.TrivialWrapperFunction, []},
+                {SephiaCredo.Checks.UndefinedDocReference, []},
                 {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
-                {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
+                {SephiaCredo.Checks.UnusedSetupKeysPerTest, []},
+                {SephiaCredo.Checks.UtcCalendarDate, []}
               ]
             }
           }
