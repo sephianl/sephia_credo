@@ -259,12 +259,26 @@ Check what replaced it before touching the prose.
 
 A reference resolves by suffix, the way an `alias` reads it, so `ModelBuilder.Clients` is fine when
 the project defines `MyApp.Exvrp.ModelBuilder.Clients`. Mox mocks and modules from dependencies
-count as defined. A trailing `.function/2` is ignored when resolving the name.
+count as defined, as does any module-shaped value a supervision tree passes as `:name` —
+`{Phoenix.PubSub, name: MyApp.PubSub}` makes `MyApp.PubSub` a name docs may use. A trailing
+`.function/2` is ignored when resolving the name.
 
-Use `ignore` only for names that were never modules — a process name registered at runtime, a
-capitalised prose word, a SQL keyword inside a query doc. **Do not use it to silence a link that
-rotted**, and do not un-backtick a real reference to make the report go away: that hides a dead link
-instead of fixing it.
+**When a whole class of reference reports, reach for `extra_name_paths`, not `ignore`.** It names
+paths or globs the scanned tree does not cover: an `.ex`/`.exs` path is parsed for its `defmodule`s,
+which is how a `priv/repo/migrations` module resolves, and any other extension contributes its
+capitalised words, which is how `assets/js/hooks.ts` makes `RouteMapHook` resolve. Prefer it over
+`ignore` even for JavaScript: a hook renamed on the JS side then reports here, where ignoring it
+would leave the doc silently wrong.
+
+```elixir
+{SephiaCredo.Checks.UndefinedDocReference,
+ extra_name_paths: ["priv/repo/migrations/*.exs", "assets/js/hooks.ts"]}
+```
+
+Use `ignore` only for the residue — a capitalised prose word, a SQL keyword inside a query doc, a
+class in a sibling repo no path can reach. **Do not use it to silence a link that rotted**, and do
+not un-backtick a real reference to make the report go away: that hides a dead link instead of
+fixing it. A growing `ignore` list means a missing `extra_name_paths` entry.
 
 During a staged rename, a reference to a name that does not exist *yet* is reported the same as one
 to a name that no longer exists. The check cannot tell the two apart. If the branch deliberately

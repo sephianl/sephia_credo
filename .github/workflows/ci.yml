@@ -6,22 +6,45 @@ on:
   pull_request:
     branches: [main]
 
+# A push that lands while the previous one is still running makes that run
+# stale, so it is cancelled rather than raced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    runs-on: self-hosted
-    env:
-      DEVENV_NO_GIT_HOOKS: "1"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # Kept in step with devenv.nix, which pins elixir_1_19 on OTP 28.
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-1.19-28-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-1.19-28-
+
       - name: Get dependencies
-        run: devenv shell mix deps.get
+        run: mix deps.get
 
       - name: Compile
-        run: devenv shell mix compile --warnings-as-errors
+        run: mix compile --warnings-as-errors
 
       - name: Check formatting
-        run: devenv shell mix format --check-formatted
+        run: mix format --check-formatted
+
+      # `--strict` is what the pre-commit hook runs through `.check.exs`, so a
+      # commit that passes locally is the one CI passes too.
+      - name: Run Credo
+        run: mix credo --strict
 
       - name: Run tests
-        run: devenv shell mix test
+        run: mix test

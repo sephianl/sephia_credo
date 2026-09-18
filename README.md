@@ -27,7 +27,7 @@ Add `sephia_credo` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sephia_credo, "~> 0.6", only: [:dev, :test], runtime: false}
+    {:sephia_credo, "~> 0.7", only: [:dev, :test], runtime: false}
   ]
 end
 ```
@@ -242,9 +242,20 @@ A staged refactor breaks it the other way too: when one rename is split across s
 
 A reference resolves if it matches any module in the project or in a dependency, **by suffix** — `ModelBuilder.Clients` resolves to `Zelo.Planner.Exvrp.ModelBuilder.Clients` the way a reader resolves it, because that is how the `alias` at the top of the file reads. A nested module resolves under its full name, so a `defmodule Params` inside `ExVrp.PenaltyManager` answers to `ExVrp.PenaltyManager.Params`. Modules `Mox.defmock/2` creates are collected too, including when the mock name resolves through an alias in scope. A trailing `.function/2` is stripped before the name is looked up.
 
+A name a supervision tree registers resolves as well, because docs name a registered process exactly the way they name a module and no module ever answers to it. Any module-shaped value passed as `:name` counts — `{Phoenix.PubSub, name: MyApp.PubSub}`, `{Registry, keys: :unique, name: MyApp.StopRegistry}` — collected from anywhere in the scanned tree, not only the file that documents it. It is the `:name` key that is matched and not the child spec around it, so a `name:` elsewhere resolves its value too; that costs a report on a rotted reference whose name happens to sit behind some other `name:`, which is the price of not hard-coding what a child spec looks like.
+
 Only backticked references are reported — an unquoted module name in a sentence is prose and is left alone. So is a bare word spelled like a proper noun: two capitals in a row are an acronym, which keeps `` `PostgreSQL` ``, `` `OpenAPI` `` and `` `GraphQL` `` out, and a short built-in vocabulary covers the ones shaped exactly like a module, such as `` `GitHub` `` and `` `TypeScript` ``. A dotted name or one carrying `fun/arity` is unambiguous and always reported.
 
-`ignore` is for the names that look like references and are not: process names registered at runtime, the occasional capitalised prose word, SQL keywords in a query doc. Entries may be strings or unquoted module names — `ignore: ["Zelo.TaskSupervisor"]` and `ignore: [Zelo.TaskSupervisor]` both work. Prefer fixing a reference over ignoring it — that list is for things that were never modules, not for links that rotted.
+`extra_name_paths` reaches names the scanned tree never contains, and is the answer whenever a whole *class* of reference reports. Credo scans `lib/`, `test/` and friends, so a module under `priv/repo/migrations` is real and unresolvable at once; an `.ex`/`.exs` path listed here is parsed for its `defmodule`s. Any other extension is read for capitalised words instead, which is how a Phoenix project resolves the LiveView hooks its docs name.
+
+```elixir
+{SephiaCredo.Checks.UndefinedDocReference,
+ extra_name_paths: ["priv/repo/migrations/*.exs", "assets/js/hooks.ts"]}
+```
+
+That is worth more than ignoring such a name: point at `assets/js/hooks.ts` and a hook renamed on the JavaScript side reports here, which is the whole point of the check — ignoring it would leave the doc silently wrong instead.
+
+`ignore` is for the residue: the occasional capitalised prose word, a SQL keyword in a query doc, a class in a sibling repo no path can reach. Entries may be strings or unquoted module names — `ignore: ["MapProviderHolder"]` and `ignore: [MapProviderHolder]` both work. Prefer fixing a reference over ignoring it — that list is for things that were never modules, not for links that rotted — and a growing list means a missing `extra_name_paths` entry.
 
 ### UnusedSetupKeysInTests
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-18
+
+### Added
+
+- `UndefinedDocReference` gained `extra_name_paths`, for names the scanned tree does not contain. An `.ex`/`.exs` path is parsed for its `defmodule`s, which is what makes a module under `priv/repo/migrations` resolve — Credo scans `lib/` and `test/`, so such a reference was real and unreportable-as-valid at the same time, a defect rather than a policy call. Any other extension is read for its capitalised words, which lets a Phoenix project point at `assets/js/hooks.ts` and resolve the LiveView hooks its docs name. Resolving a hook beats ignoring it: renamed on the JavaScript side it now reports, where an `ignore` entry would leave the doc silently wrong. Measured on the same project, the two together take the ignore list from 12 entries to 2 — a Kotlin class in a sibling repo and an OTLP wire type — while every true positive still reports.
+
+### Changed
+
+- `UndefinedDocReference` now resolves names a supervision tree registers. Any module-shaped value passed as `:name` — `{Phoenix.PubSub, name: MyApp.PubSub}`, `{Finch, name: MyApp.Finch}`, `{Registry, keys: :unique, name: MyApp.StopRegistry}` — is collected from anywhere in the scanned tree and counts as defined, because docs name a registered process exactly the way they name a module and no module ever answers to it. It is the `:name` key that is matched and not the child spec around it, so a `name:` anywhere else resolves its value too. These were the check's largest false-positive class and its own docs sent them to `ignore`; on a 2314-file project that was 4 of 12 ignore entries, and one more with every named child added to a supervision tree.
+
 ## [0.6.0] - 2026-09-15
 
 0.4.0 and 0.5.0 were tagged but never published to Hex; upgrading from 0.3.0 brings all three releases' changes.

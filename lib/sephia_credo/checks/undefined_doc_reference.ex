@@ -3,7 +3,7 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
     run_on_all: true,
     base_priority: :normal,
     category: :warning,
-    param_defaults: [ignore: []],
+    param_defaults: [ignore: [], extra_name_paths: []],
     explanations: [
       check: """
       A backticked module reference that names no module is a dead link.
@@ -40,6 +40,17 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
       `ExVrp.PenaltyManager` answers to `ExVrp.PenaltyManager.Params`. Modules
       `Mox.defmock/2` creates are collected too.
 
+      A name a supervision tree registers counts as defined, because docs name a
+      registered process exactly the way they name a module and no module ever
+      answers to it. Any module-shaped value passed as `:name` is collected —
+      `{Phoenix.PubSub, name: MyApp.PubSub}`, `{Registry, keys: :unique, name:
+      MyApp.StopRegistry}` — from anywhere in the scanned tree, not only the
+      file that documents it. What is matched is the `:name` key rather than the
+      child spec around it, so a `name:` elsewhere resolves its value too. That
+      costs a report on a rotted reference whose name happens to sit behind some
+      other `name:`, and buys not having to hard-code the shape of a child spec,
+      which every library spells its own way.
+
       Backticks mean "literal", not "module", so most of what they wrap is not
       a reference at all. Three rules keep those out without a config entry:
 
@@ -62,10 +73,21 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
       measured above had 45 broken references, 22 of them dotted, and the
       compound-word rule caught most of the rest.
 
-      `ignore` exists for the residue — a name registered at runtime that no
-      module answers to, such as a `Task.Supervisor` child spec's `:name`. It
-      should stay close to empty. Prefer fixing a reference over ignoring it;
-      the list is for things that were never modules, not for links that rotted.
+      `extra_name_paths` reaches names the check would otherwise never see, and
+      is the answer whenever a whole *class* of reference reports. Credo scans
+      `lib/`, `test/` and friends, so a module under `priv/repo/migrations` is
+      real and unresolvable at once; an `.ex`/`.exs` path here is parsed for its
+      `defmodule`s the same way. Any other extension is read for capitalised
+      words instead, which is how a Phoenix project resolves the LiveView hooks
+      its docs name — point at `assets/js/hooks.ts` and `` `RouteMapHook` ``
+      resolves. That is worth more than ignoring such a name: a hook renamed in
+      JavaScript then reports here, which is the whole point of the check.
+
+      `ignore` is for the residue only — a capitalised prose word, a SQL keyword
+      in a query doc, a class in a sibling repo no path here can reach. It
+      should stay close to empty, and a growing list means a missing
+      `extra_name_paths` entry. Prefer fixing a reference over ignoring it; the
+      list is for things that were never modules, not for links that rotted.
 
       Turn the check off entirely where documentation is *about* code that is
       not there: a library whose docs describe the consuming project, a
@@ -74,7 +96,11 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
       exactly that reason.
       """,
       params: [
-        ignore: "Backticked names that are not modules and never will be."
+        ignore: "Backticked names that are not modules and never will be.",
+        extra_name_paths:
+          "Paths or globs holding names the scanned tree does not define. " <>
+            "`.ex`/`.exs` files are parsed for `defmodule`s; anything else " <>
+            "contributes its capitalised words."
       ]
     ]
 
@@ -92,7 +118,7 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
 
   @impl true
   def run_on_all_source_files(exec, source_files, params) do
-    known = known_names(source_files)
+    known = known_names(source_files, params)
     ignored = ignored_names(params)
 
     source_files
@@ -120,13 +146,44 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
   # `Credo.Code.ast/1` re-parses on every call, so this is a second pass over
   # the whole tree on top of Credo's own per-file work. Credo runs its own
   # `run_on_all` checks concurrently for the same reason.
-  defp known_names(source_files) do
+  defp known_names(source_files, params) do
     source_files
     |> Task.async_stream(&defined_modules/1, ordered: false, timeout: :infinity)
     |> Enum.flat_map(fn {:ok, names} -> names end)
     |> Enum.concat(dependency_modules())
+    |> Enum.concat(extra_names(params))
     |> Enum.flat_map(&suffixes_of/1)
     |> MapSet.new()
+  end
+
+  defp extra_names(params) do
+    params
+    |> Params.get(:extra_name_paths, __MODULE__)
+    |> Enum.flat_map(&Path.wildcard/1)
+    |> Enum.flat_map(&names_in_file/1)
+  end
+
+  defp names_in_file(path) do
+    case File.read(path) do
+      {:ok, contents} -> names_in(Path.extname(path), contents)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp names_in(extension, contents) when extension in [".ex", ".exs"] do
+    case Code.string_to_quoted(contents) do
+      {:ok, ast} -> ast |> collect_modules([]) |> expand_through_aliases(collect_aliases(ast))
+      {:error, _reason} -> []
+    end
+  end
+
+  # Anything else is read for the shape a reference has rather than parsed: a
+  # file named here is a registry the project points at on purpose, so every
+  # capitalised word in it counts.
+  defp names_in(_extension, contents) do
+    ~r/\b[A-Z][A-Za-z0-9]*\b/
+    |> Regex.scan(contents)
+    |> Enum.map(&hd/1)
   end
 
   defp defined_modules(source_file) do
@@ -173,6 +230,14 @@ defmodule SephiaCredo.Checks.UndefinedDocReference do
 
   defp collect_modules({:defmock, _meta, args}, prefix) when is_list(args) do
     collect_defmock(args, prefix)
+  end
+
+  # A module-shaped value passed as `:name` is a process registering under that
+  # name — a `Phoenix.PubSub`, a `Registry`, a `Task.Supervisor`. No module ever
+  # answers to it, so nothing else here would collect it, and docs name it the
+  # same way they name a module.
+  defp collect_modules({:name, {:__aliases__, _, segments}}, _prefix) when is_list(segments) do
+    [Enum.map(segments, &to_string/1)]
   end
 
   defp collect_modules({_form, _meta, args}, prefix) when is_list(args) do

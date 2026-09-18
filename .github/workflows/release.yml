@@ -11,14 +11,20 @@ permissions:
 
 jobs:
   release:
-    runs-on: self-hosted
-    env:
-      DEVENV_NO_GIT_HOOKS: "1"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           # Tags are what the guard below reads; the default depth fetches none.
           fetch-depth: 0
+
+      # Kept in step with devenv.nix, which pins elixir_1_19 on OTP 28. No
+      # dependency cache here: a release is cut rarely and is worth building
+      # from scratch.
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
 
       - name: Get version
         id: version
@@ -37,16 +43,17 @@ jobs:
 
       - name: Get dependencies
         if: steps.check_tag.outputs.exists == 'false'
-        run: devenv shell mix deps.get
+        run: mix deps.get
 
       # A tag is what the Hex publish is cut from, so the tree is verified here
       # rather than trusting that ci.yml passed on the same commit.
       - name: Verify
         if: steps.check_tag.outputs.exists == 'false'
         run: |
-          devenv shell mix compile --warnings-as-errors
-          devenv shell mix format --check-formatted
-          devenv shell mix test
+          mix compile --warnings-as-errors
+          mix format --check-formatted
+          mix credo --strict
+          mix test
 
       # Tag and GitHub release only. Publishing to Hex is done by hand from a
       # machine that is already authenticated, so no API key lives in CI.
