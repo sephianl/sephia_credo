@@ -103,24 +103,6 @@ reported: reaching `-1` walks to the end. Hoist it — the enumerable does not c
 three-element config list is reported exactly like a walk over a large matrix. Both are O(n²); only
 one is worth changing. If it is small and fixed, silence the line rather than restructuring.
 
-### `GenericModuleName` (readability, `:low` priority)
-
-Flags a `defmodule` whose final name segment carries no meaning at the point of use — `Result`,
-`Data`, `Helper`, `Utils`, `Manager`, and role suffixes like `…Implementation`. The name reads fine
-fully qualified; one `alias` later the call site says `Result` and names nothing.
-
-Fix by renaming the module for what it holds or does. That touches every reference, which is why
-this ships at `:low` priority and only surfaces under `mix credo --strict` — it is a backlog item,
-not a build failure.
-
-**Do not silence it by nesting differently.** The path is context, never the name; the report is
-about what the call site reads after the `alias`.
-
-Framework and ecosystem names (`Application`, `Supervisor`, `Endpoint`, `Router`, `Repo`, …) are
-never reported — renaming those fights the tooling. Matching is case-sensitive and whole-segment,
-so `Database` and `Metadata` are not reported. If a generic word is genuinely right for a module,
-`denylist` replaces the default list and `extra_denylist` adds to it.
-
 ### `KeywordBagParameter` (refactor)
 
 Flags a parameter the body only reaches into with `Keyword.get/fetch/fetch!/take/has_key?`. Reading
@@ -228,6 +210,15 @@ it. The check cannot see the statement, and treating unreadable as safe would mi
 Set `extra_resource_modules` if your resources say `use MyApp.Resource` rather than
 `use Ash.Resource`. Without it the check has nothing to match and reports nothing at all.
 
+### `ShadowedAlias` (warning)
+
+Flags two aliases in one scope whose last segment is the same. An alias resolves to its final
+segment only, so the later one wins every call site and the earlier is unreachable. Elixir emits
+no warning and both aliases count as used.
+
+Fix by giving one of them `:as`. A collision where either side already carries an explicit `:as`
+is not reported.
+
 ### `StructComparisonOperator` (warning)
 
 Flags `<`, `>`, `<=`, `>=`, `==`, `!=` applied to `Date`, `Time`, `DateTime`, `NaiveDateTime`,
@@ -254,6 +245,30 @@ Fix by calling the target directly at the call site and deleting the wrapper. Do
 adding a pointless argument to make it look non-trivial. Wrappers that supply an argument, reorder
 or transform them, match a pattern, guard, carry a default, or add a `rescue`/`catch`/`else`/`after`
 clause are already not reported.
+
+### `UndefinedDocReference` (warning)
+
+Flags a backticked module reference — in a `@moduledoc`, a `@doc`, a `description:` string, or a
+`raise` message — that names no module in the project or in a dependency. The compiler keeps code
+honest through a rename and says nothing about prose, so the reference keeps pointing at whatever
+the module used to be called.
+
+**Fix by finding the module the reference should name now, not by deleting the sentence.** A dead
+reference usually means the thing it describes moved; the sentence is still true about the new name.
+Check what replaced it before touching the prose.
+
+A reference resolves by suffix, the way an `alias` reads it, so `ModelBuilder.Clients` is fine when
+the project defines `MyApp.Exvrp.ModelBuilder.Clients`. Mox mocks and modules from dependencies
+count as defined. A trailing `.function/2` is ignored when resolving the name.
+
+Use `ignore` only for names that were never modules — a process name registered at runtime, a
+capitalised prose word, a SQL keyword inside a query doc. **Do not use it to silence a link that
+rotted**, and do not un-backtick a real reference to make the report go away: that hides a dead link
+instead of fixing it.
+
+During a staged rename, a reference to a name that does not exist *yet* is reported the same as one
+to a name that no longer exists. The check cannot tell the two apart. If the branch deliberately
+documents the end state, silence those lines for the duration rather than adding them to `ignore`.
 
 ### `UnusedSetupKeysInTests` (design, test files)
 
@@ -291,3 +306,23 @@ the tests that use it.
 **Known limitation:** a test can depend on a fixture without naming it — `setup` inserts rows that
 the code under test then queries. This check cannot see that and will flag the test. Disable it for
 those files; do not delete the setup.
+
+### `UtcCalendarDate` (warning)
+
+Flags a calendar date taken from the UTC clock — `Date.utc_today()`, or a `utc_now()` collapsed with
+`to_date/1`. If the project's business day is a local timezone, that date is the previous day's for
+the first hours of every local day.
+
+Fix by deriving the date in the project's operating timezone, through whatever helper it already has
+for that. The message names it when `local_date_call` is configured.
+
+**Do not "fix" it by widening a comparison or adding a tolerance.** The value is wrong for two hours
+a day, not imprecise, and a tolerance hides the next one. Equally, do not reach for
+`# credo:disable-for-this-file` on a test file because the tests pass — they pass because you ran
+them in the afternoon.
+
+A report is worth verifying before acting on: the check reads one call, not what the date is for. A
+genuinely UTC-keyed value — a UTC-partitioned object key, a retention cutoff defined in UTC, a
+filename prefix that only has to be stable — is correct as written and wants
+`# credo:disable-for-next-line`. What decides it is the other side of the comparison: if the date is
+handed to something that resolves dates in a local zone, it is a defect.

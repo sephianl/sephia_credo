@@ -27,7 +27,7 @@ Add `sephia_credo` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sephia_credo, "~> 0.1", only: [:dev, :test], runtime: false}
+    {:sephia_credo, "~> 0.6", only: [:dev, :test], runtime: false}
   ]
 end
 ```
@@ -50,7 +50,6 @@ mix deps.get
           {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
           {SephiaCredo.Checks.AssertWithoutAssertion, []},
           {SephiaCredo.Checks.EnumAtInLoop, []},
-          {SephiaCredo.Checks.GenericModuleName, []},
           {SephiaCredo.Checks.KeywordBagParameter, []},
           {SephiaCredo.Checks.MapAsSet, []},
           {SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []},
@@ -59,10 +58,13 @@ mix deps.get
           {SephiaCredo.Checks.ProcessSleepInTests, []},
           {SephiaCredo.Checks.RawRuntimeError, []},
           {SephiaCredo.Checks.RepoInAshResource, []},
+          {SephiaCredo.Checks.ShadowedAlias, []},
           {SephiaCredo.Checks.StructComparisonOperator, []},
           {SephiaCredo.Checks.TrivialWrapperFunction, []},
+          {SephiaCredo.Checks.UndefinedDocReference, []},
           {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
-          {SephiaCredo.Checks.UnusedSetupKeysPerTest, []}
+          {SephiaCredo.Checks.UnusedSetupKeysPerTest, []},
+          {SephiaCredo.Checks.UtcCalendarDate, local_date_call: "LocalTime.today()"}
           # Opt-in (not enabled by default):
           # {SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll, []}
         ]
@@ -74,11 +76,11 @@ mix deps.get
 
 ## Upgrading from 0.3
 
-0.4.0 was tagged but never published to Hex, so 0.3.0 is the previous release on Hex and this section covers both 0.4 and 0.5.
+0.4.0 and 0.5.0 were tagged but never published to Hex, so 0.3.0 is the previous release on Hex and this section covers 0.4, 0.5 and 0.6.
 
 `UnusedSetupKeysInTests` now reports on the **binding line** inside the `setup` block — the line to delete — instead of once on the `setup do` line. A `# credo:disable-for-next-line SephiaCredo.Checks.UnusedSetupKeysInTests` comment sitting above `setup do` therefore suppresses nothing any more, and the issues it was hiding will reappear. Move the comment down to the binding it covers, or switch that file to `# credo:disable-for-this-file`.
 
-Nine checks are new and enabled by default in the generated config — `EnumAtInLoop`, `GenericModuleName`, `KeywordBagParameter`, `MapAsSet`, `MultiStepMutationWithoutTransaction`, `PatternMatchInFunctionHead`, `PreloadInLoop`, `RepoInAshResource`, `TrivialWrapperFunction`. Adding them to an existing `.credo.exs` is opt-in; nothing changes until you do. `MultiStepMutationWithoutTransaction` sees Ash code-interface calls only once you list your resource modules in `ash_resources:`, and `GenericModuleName` ships at `:low` priority so it surfaces only under `mix credo --strict`.
+Eleven checks are new and enabled by default in the generated config — `EnumAtInLoop`, `KeywordBagParameter`, `MapAsSet`, `MultiStepMutationWithoutTransaction`, `PatternMatchInFunctionHead`, `PreloadInLoop`, `RepoInAshResource`, `ShadowedAlias`, `TrivialWrapperFunction`, `UndefinedDocReference`, `UtcCalendarDate`. Adding them to an existing `.credo.exs` is opt-in; nothing changes until you do. `MultiStepMutationWithoutTransaction` sees Ash code-interface calls only once you list your resource modules in `ash_resources:`, and `UndefinedDocReference` reads every file in one pass, so its first run on an existing codebase is worth taking as a backlog rather than as a build failure. `UtcCalendarDate` encodes the assumption that the project's business day is a local timezone — a project that genuinely keys its data on the UTC day should leave it out.
 
 ## Upgrading from 0.2
 
@@ -98,7 +100,6 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `AshCodeInterfaceReadWithArgs` | Warning | Flags `define :name, action: :read, args: [...]` inside `code_interface` — Ash's generic `:read` action raises at runtime when called with args |
 | `AssertWithoutAssertion` | Warning | Flags `assert pattern = expr` in tests where the bound variables are never used — the match succeeds vacuously |
 | `EnumAtInLoop` | Refactor | Flags `Enum.at` with a computed or negative index inside a loop — O(n) per element, so O(n²) overall |
-| `GenericModuleName` | Readability *(`:low`)* | Flags a `defmodule` whose final segment says nothing at the point of use — `Result`, `Helper`, `…Implementation` |
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
 | `MultiStepMutationWithoutTransaction` | Warning | Flags a function performing 2+ database mutations outside a transaction — a mid-sequence failure leaves partial state |
@@ -107,11 +108,14 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `ProcessSleepInTests` | Refactor | Flags `Process.sleep` in `*_test.exs` files — causes flakes and slows the suite |
 | `RawRuntimeError` | Warning | Flags `raise "msg"` and `raise RuntimeError, ...` — error trackers can't group these meaningfully |
 | `RepoInAshResource` | Warning | Flags a statement-executing `Repo` call inside an Ash resource, change, validation, calculation or preparation — no tenant scoping, no notifications, no authorization |
+| `ShadowedAlias` | Warning | Flags two aliases in one scope sharing a final segment — every call resolves to the second and the first is unreachable, with no compiler warning |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
 | `TrivialWrapperFunction` | Refactor | Flags a single-clause `defp` that only forwards its arguments to another module |
+| `UndefinedDocReference` | Warning | Flags a backticked module reference — in a doc, a `description:` or a `raise` message — that names no module in the project or its dependencies |
 | `UnusedSetupKeysInTests` | Design | Flags `setup` fixture work no test in scope reads — the unused-variable warning the compiler can't give you |
 | `UnusedSetupKeysPerTest` | Design | Flags a test that consumes none of the setup keys in scope for it |
+| `UtcCalendarDate` | Warning | Flags a calendar date taken from the UTC clock — `Date.utc_today()`, or `utc_now()` collapsed with `to_date/1` — which is the previous day's date for the first hours of every local day |
 
 ### AppendInLoop
 
@@ -134,18 +138,6 @@ Inside an Ash `code_interface do ... end` block, `define :name, action: :read, a
 A non-negative integer-literal index is not flagged: `Enum.at(list, 3)` takes at most four steps, bounded by the literal rather than by the length of the list. A negative literal *is* flagged — reaching `-1` means walking to the end, so it costs O(n) like any computed index. The fix is to take the element once before the loop; swapping in `List.last/1` is the same walk and changes nothing. As with `PreloadInLoop`, only per-element regions are examined, so `Enum.at` in the collection a loop iterates over is not reported.
 
 Known limitation: the check cannot know how large a collection is, so `Enum.at` over a three-element list inside a loop is reported the same as a walk over a large matrix. Both are O(n²); only one is worth your time.
-
-### GenericModuleName
-
-A module name has to mean something where it is *referenced*, not only where it is defined. `Zelo.Planner.Mutations.ReorderStopsSolver.Result` reads fine nested; one `alias` later the call site says `Result.new(...)` and names nothing. Name the module for what it holds or does — `ReorderedRoute` — so the alias carries the meaning with it.
-
-`denylist` matches the final segment **whole**. Measured over a 2000-module codebase, matching those words as suffixes instead reported roughly forty modules, nearly all of them meaningful — `ScanResult`, `PlanJobInput`, `RouteInfo`, `ZoneData` all say what they are at the call site. A qualifier in front of a generic word usually rescues it. `suffix_denylist` is the exception and matches the end of the segment, because a role suffix is *not* rescued by a qualifier: `RoutingImplementation` names what a module is to the compiler rather than what it does.
-
-Matching is case-sensitive, so `Database` is not a `Base` and `Metadata` is not `Data`. Framework and ecosystem names are never reported — `Application`, `Supervisor`, `Registry`, `Endpoint`, `Router`, `Repo`, `Telemetry`, `Mailer`, `Gettext`, `ErrorHTML`, `ErrorJSON`, `Layouts`, `CoreComponents` — since there the convention carries the meaning and renaming would fight the tooling. `Credo.Check.Readability.ModuleNames` checks a different thing: that a name is PascalCase, not that it means anything.
-
-`denylist` replaces the default list; `extra_denylist` adds to it without restating it. Support modules under `test/` are best excluded with `files: %{excluded: [~r"/test/"]}` rather than by the check.
-
-Renaming a module touches every reference, so this check ships at `:low` priority — it surfaces under `mix credo --strict` and reports without failing a build.
 
 ### KeywordBagParameter
 
@@ -216,6 +208,16 @@ SQL assembled at runtime is **not** exempt. Being unable to read a statement is 
 
 Any alias whose last segment is `Repo` matches. `extra_resource_modules` names project wrappers that themselves `use Ash.Resource` — without it the check is silent in a codebase where resources say `use MyApp.Resource`.
 
+### ShadowedAlias
+
+Two aliases in one scope ending in the same segment resolve to one name, and the last one wins. `alias Route.Delete` followed by `alias Stop.Delete` makes every `Delete.` call in that module reach `Stop.Delete`; the first alias is unreachable. Elixir reports nothing — it is not a redefinition error, there is no warning, and both aliases count as used.
+
+Distinct full names guarantee nothing, because an alias resolves to its final segment only. That makes this a standing hazard for any rename that moves a module under a new parent: `Route.Delete` and `Stop.Delete` are unambiguous in a directory listing and identical at the call site. Measured on one reorganisation of a 326-module namespace, two such pairs reached a green test run before anyone noticed — `RouteWorker.Supervisor` against `CompanyWorker.Supervisor` broke 10 tests, `Route.Delete` against `Stop.Delete` broke 4 — and nine more pairs were latent, waiting for the first file that wanted both.
+
+Fix it at the alias with `:as`, not at the call site. An explicit `:as` is never reported even when it collides — that spelling is a deliberate choice a reader can see. Only the implicit final segment is.
+
+Scope is read the way `alias` itself is scoped, so only two aliases that reach the same code collide. Sibling modules in one file may each alias a different `Delete`, and so may two function bodies, two `case` branches, or a `quote` and the module defining it — an alias a `__using__` injects lands in the caller's scope, not in the macro's own.
+
 ### StructComparisonOperator
 
 Elixir's comparison operators (`<`, `>`, `==`, etc.) use Erlang's term order on structs, which walks fields in declaration order. For most calendar/numeric structs this produces silently incorrect results — for example, `Decimal.new("1.0") == Decimal.new("1.00")` returns `false`, and `Decimal.new("1.5") > Decimal.new("2")` returns `true`. This check enforces the use of `Date.compare/2`, `DateTime.compare/2`, `Decimal.compare/2`, `Version.compare/2`, etc. instead. Built-in coverage: `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Decimal`, `Version`. Configurable via `extra_modules`.
@@ -231,6 +233,18 @@ Inside a polling fn (configurable via `poll_functions:`, defaults to `[:wait_unt
 A private function whose whole body is one call to another module, passing its parameters straight through, adds a name and nothing else — and hides which module actually does the work. Call the target at the call site and delete the wrapper.
 
 A wrapper that earns its keep is not reported: supplying an argument (`defp fetch(id), do: Repo.get(Thing, id)`), supplying an option, reordering or transforming arguments, matching a pattern, guarding, or carrying a default. Nor is one that adds a `rescue`, `catch`, `else` or `after` clause — that handler is usually the whole reason the wrapper exists, and deleting the wrapper would delete it too. Only single-clause `defp` is reported — a public delegation is what `defdelegate` is for.
+
+### UndefinedDocReference
+
+A backticked module reference that names no module is a dead link. The compiler keeps code honest through a rename and says nothing about prose, so `@moduledoc`, `@doc`, `description:` strings and the module names inside `raise` messages all keep pointing at whatever the module used to be called. `mix docs` is the only thing that would have caught it, and most projects do not build docs in CI.
+
+A staged refactor breaks it the other way too: when one rename is split across several pull requests it is tempting to write the prose for the name the module will have at the end. Measured over one such branch — 170 files, the first of eight slices — 45 references across 26 names pointed at modules that did not exist yet, alongside 20 `Logger` prefixes and one `raise` message.
+
+A reference resolves if it matches any module in the project or in a dependency, **by suffix** — `ModelBuilder.Clients` resolves to `Zelo.Planner.Exvrp.ModelBuilder.Clients` the way a reader resolves it, because that is how the `alias` at the top of the file reads. A nested module resolves under its full name, so a `defmodule Params` inside `ExVrp.PenaltyManager` answers to `ExVrp.PenaltyManager.Params`. Modules `Mox.defmock/2` creates are collected too, including when the mock name resolves through an alias in scope. A trailing `.function/2` is stripped before the name is looked up.
+
+Only backticked references are reported — an unquoted module name in a sentence is prose and is left alone. So is a bare word spelled like a proper noun: two capitals in a row are an acronym, which keeps `` `PostgreSQL` ``, `` `OpenAPI` `` and `` `GraphQL` `` out, and a short built-in vocabulary covers the ones shaped exactly like a module, such as `` `GitHub` `` and `` `TypeScript` ``. A dotted name or one carrying `fun/arity` is unambiguous and always reported.
+
+`ignore` is for the names that look like references and are not: process names registered at runtime, the occasional capitalised prose word, SQL keywords in a query doc. Entries may be strings or unquoted module names — `ignore: ["Zelo.TaskSupervisor"]` and `ignore: [Zelo.TaskSupervisor]` both work. Prefer fixing a reference over ignoring it — that list is for things that were never modules, not for links that rotted.
 
 ### UnusedSetupKeysInTests
 
@@ -258,6 +272,30 @@ The narrow companion to `UnusedSetupKeysInTests`. Where that one asks whether *a
 It deliberately says nothing about a test that consumes *part* of a shared fixture — different tests reading different parts of one setup is what `setup` is for.
 
 Known limitation: a test can depend on a fixture without naming it, when `setup` inserts rows that the code under test then queries. This check cannot see that and will flag such a test — disable it for those files rather than deleting the setup.
+
+### UtcCalendarDate
+
+`Date.utc_today()` is the date at midnight UTC. If the project's business day is a local timezone, that is the *previous* day's date for the first hours of every local day — one hour in winter, two in summer for a zone like `Europe/Amsterdam`. The code is right for 22 hours and wrong for two, which is why it survives review, CI and manual testing and surfaces as a bug report from whoever was working at 00:30.
+
+Three spellings are reported, all of which produce a `Date`:
+
+```elixir
+Date.utc_today()
+DateTime.utc_now() |> DateTime.to_date()
+NaiveDateTime.utc_now() |> NaiveDateTime.to_date()
+```
+
+A bare `DateTime.utc_now/0` is **not** reported. A UTC instant is the correct way to hold a point in time and is what should be stored; only collapsing one to a calendar date commits to a day boundary. That line is what keeps the check quiet in the many places that legitimately want "now", and it is why the check needs no timezone literal to configure — it fires on the shape of the conversion, not on which zone the project uses.
+
+Test files are checked too, and exempting them is what lets the drift back in: a fixture dated in UTC and a filter resolving dates locally disagree for exactly those two hours, so a suite reads as green at 14:00, red at 00:16, and flaky to everyone. Measured on one 2200-file project, 39 such call sites across 18 test files turned the suite red at 00:16, alongside two user-visible defects in application code — a maintenance window reported as inactive between 00:00 and 02:00, and an order form whose time dropdown offered yesterday's date while the field beside it defaulted to today's, failing a same-day validation.
+
+`local_date_call` names the project's own helper so the message says what to write instead of only what is wrong:
+
+```elixir
+{SephiaCredo.Checks.UtcCalendarDate, local_date_call: "LocalTime.today()"}
+```
+
+A project that genuinely keys its data on the UTC day should disable this check rather than fight it. Individual UTC-keyed values — a UTC-partitioned object key, a retention cutoff defined in UTC — are the case for `# credo:disable-for-next-line`.
 
 ## Usage rules for AI agents
 

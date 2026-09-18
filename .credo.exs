@@ -73,7 +73,6 @@
           {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
           {SephiaCredo.Checks.AssertWithoutAssertion, []},
           {SephiaCredo.Checks.EnumAtInLoop, []},
-          {SephiaCredo.Checks.GenericModuleName, []},
           {SephiaCredo.Checks.KeywordBagParameter, []},
           {SephiaCredo.Checks.MapAsSet, []},
           {SephiaCredo.Checks.MultiStepMutationWithoutTransaction, []},
@@ -82,11 +81,18 @@
           {SephiaCredo.Checks.ProcessSleepInTests, []},
           {SephiaCredo.Checks.RawRuntimeError, []},
           {SephiaCredo.Checks.RepoInAshResource, []},
+          {SephiaCredo.Checks.ShadowedAlias, []},
           {SephiaCredo.Checks.StructComparisonOperator, []},
           {SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll, []},
           {SephiaCredo.Checks.TrivialWrapperFunction, []},
+          # POLICY — this library's explanations describe the *consuming*
+          # project's modules (`Ash`, `Ecto.Multi`, `MyApp.Repo`) and its test
+          # heredocs contain deliberately broken docs. Neither resolves here,
+          # and neither should.
+          {SephiaCredo.Checks.UndefinedDocReference, false},
           {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
           {SephiaCredo.Checks.UnusedSetupKeysPerTest, []},
+          {SephiaCredo.Checks.UtcCalendarDate, []},
 
           #
           ## Consistency Checks
