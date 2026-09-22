@@ -49,6 +49,8 @@ mix deps.get
           {SephiaCredo.Checks.AppendInLoop, []},
           {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
           {SephiaCredo.Checks.AssertWithoutAssertion, []},
+          {SephiaCredo.Checks.ChangelogInDoc, []},
+          {SephiaCredo.Checks.DisproportionateModuleDoc, []},
           {SephiaCredo.Checks.EnumAtInLoop, []},
           {SephiaCredo.Checks.KeywordBagParameter, []},
           {SephiaCredo.Checks.MapAsSet, []},
@@ -99,6 +101,8 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `AppendInLoop` | Refactor | Flags O(n²) `++` inside loops (`reduce`, `fold`, `for/reduce`, recursive functions) |
 | `AshCodeInterfaceReadWithArgs` | Warning | Flags `define :name, action: :read, args: [...]` inside `code_interface` — Ash's generic `:read` action raises at runtime when called with args |
 | `AssertWithoutAssertion` | Warning | Flags `assert pattern = expr` in tests where the bound variables are never used — the match succeeds vacuously |
+| `ChangelogInDoc` | Readability | Flags a doc attribute narrating the code's own history — what it used to do, which alternative was rejected, which incident prompted the fix |
+| `DisproportionateModuleDoc` | Readability | Flags a `@moduledoc` large relative to its module — prose carrying a rule, a contract or a data set the code should carry |
 | `EnumAtInLoop` | Refactor | Flags `Enum.at` with a computed or negative index inside a loop — O(n) per element, so O(n²) overall |
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
@@ -130,6 +134,62 @@ Inside an Ash `code_interface do ... end` block, `define :name, action: :read, a
 ### AssertWithoutAssertion
 
 `assert x = expr` (or any pattern with fresh bindings on the left) succeeds vacuously: the pattern always matches a bare variable, so the assertion tests nothing about `expr`. If the bound variables are never referenced afterward, the assertion is dead. Reference them in subsequent assertions, or use `assert match?(pattern, expr)`. Test files only (`*_test.exs`).
+
+### ChangelogInDoc
+
+A `@moduledoc`, `@doc`, `@typedoc` or `@shortdoc` that narrates the code's own history — what the module used to do, which alternative was rejected, which incident prompted a fix. That history is worth recording, but a pull request dates and attributes it and a doc does neither; it just leaves every future reader a paragraph to skip about a shape they never saw. The note also outlives the rename that invalidates it, and it copies: on one 1420-module project the same sentence about a form that "used to carry two mutually exclusive booleans" sits verbatim in two sibling modules.
+
+`used to` is matched as past habitual only, because the passive participle is the far more common reading in real docs and means nothing of the sort:
+
+```elixir
+# reported — narrates a past shape
+@moduledoc "Rung 3 used to be a `Parcels` load bearer whose type measured 1x1x1 cm."
+
+# not reported — describes what is
+@moduledoc "Boundaries used to classify severity levels."
+@moduledoc "These credentials are never used to log in."
+```
+
+A copula, `never`, `not`, or a sentence boundary before the phrase marks the passive reading. A bare subject does not, so `the form used to carry` is reported and `a key used to decide` is too — the two are grammatically identical and no pattern separates them. On the same project that restriction takes the check from 34 reports, roughly two thirds of them passive, to 13 of which ten are genuine.
+
+Terms that double as domain vocabulary are deliberately out of the defaults. `leftover` reads as history in `the name is a leftover` and as a record type in `returned in :leftover as %Leftover{} values`; all four of its matches on that project were the record. `indicators` takes plain strings or regexes and replaces the default list:
+
+```elixir
+{SephiaCredo.Checks.ChangelogInDoc, indicators: ["used to", "previously", "originally"]}
+```
+
+Narrative with no marker phrase — an incident retold in the past tense, an alternative weighed in the present — reads as ordinary prose and still needs a human.
+
+### DisproportionateModuleDoc
+
+A `@moduledoc` that outweighs its module is documenting something the code should have carried. Absolute length measures nothing — a 700-line LiveView with a six-line moduledoc is fine, and the same six lines over a 20-line helper are the whole file. The ratio is what finds small modules, and that is where the problem concentrates: a one-function module is the easiest place to park a design note with nowhere else to live.
+
+```elixir
+defmodule Oban.SnoozePolicy do
+  @moduledoc """
+  Shared ceiling for Oban jobs that answer transient failures with `{:snooze, _}`.
+
+  Oban increments `job.max_attempts` on every snooze, so `attempt < max_attempts`
+  stays true forever and a job that keeps snoozing retries without bound.
+
+  Callers that hand the result straight back to Oban must convert exhaustion into
+  `{:cancel, _}` rather than re-raising: the earlier snoozes already inflated
+  `max_attempts`, so a re-raised exception still satisfies Oban's own check.
+  """
+
+  @max_attempts 5
+
+  def should_snooze?(%Oban.Job{attempt: attempt}), do: attempt < @max_attempts
+end
+```
+
+Fourteen lines of doc over one line of code, and the second paragraph is a contract every caller must honour that nothing enforces — which is the tell. A rule worth writing down belongs in a function that applies it, here one returning `{:cancel, reason}` rather than a boolean and a paragraph about what to do with it.
+
+Two further shapes it finds: prose restating data that lives elsewhere (a trusted-proxy set spelled out in a doc while the code reads it from config, the two free to drift), and a design note about a *different* system parked in whichever module felt topical — solver semantics, wire formats, a dependency's behaviour — documenting nothing the file contains.
+
+`min_doc_lines` (default `10`) is the floor below which a moduledoc is never reported, however small its module; `max_ratio` (default `0.15`) is the fraction of the module's lines above which it is. Expect a substantial first reading on an existing codebase: on one 1420-module project, 173 modules at the defaults and 32 at `min_doc_lines: 12, max_ratio: 0.35`. In `credo diff` that backlog costs nothing, so the defaults are set where they catch new prose rather than where they keep the first run quiet.
+
+Docs that are load-bearing for *this* code — a unit convention, an ordering constraint, a footgun with no other home — are the case for `# credo:disable-for-next-line`.
 
 ### EnumAtInLoop
 

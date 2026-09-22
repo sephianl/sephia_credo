@@ -72,6 +72,8 @@
           {SephiaCredo.Checks.AppendInLoop, []},
           {SephiaCredo.Checks.AshCodeInterfaceReadWithArgs, []},
           {SephiaCredo.Checks.AssertWithoutAssertion, []},
+          {SephiaCredo.Checks.ChangelogInDoc, []},
+          {SephiaCredo.Checks.DisproportionateModuleDoc, []},
           {SephiaCredo.Checks.EnumAtInLoop, []},
           {SephiaCredo.Checks.KeywordBagParameter, []},
           {SephiaCredo.Checks.MapAsSet, []},

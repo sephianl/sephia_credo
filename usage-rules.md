@@ -87,6 +87,33 @@ afterwards. A bare variable pattern always matches, so the assertion tests nothi
 Fix by asserting on the bound values afterwards, or use `assert match?(pattern, expr)`. Deleting
 the line is also valid — but only once you know what the test meant to assert.
 
+### `ChangelogInDoc` (readability)
+
+Flags a `@moduledoc`, `@doc`, `@typedoc` or `@shortdoc` that narrates the code's own history —
+what the module used to do, which alternative was rejected, which incident prompted a fix.
+
+Put that in the pull request, where it is dated and attributed. A doc is read by people who
+never saw the old shape, and the note outlives the rename that invalidates it.
+
+`used to` is matched as past habitual only: a copula, `never`, `not`, or a sentence boundary
+before it marks the passive participle (`boundaries used to classify severity`), which is not
+reported. A bare subject cannot be told apart from the real thing, so `a key used to decide`
+still reports. `leftover`, `previously` and `originally` are left out of the defaults because
+they double as domain vocabulary; add them through `indicators`, which takes strings or regexes.
+
+### `DisproportionateModuleDoc` (readability)
+
+Flags a `@moduledoc` that is large relative to the module it documents. Absolute length measures
+nothing; the ratio finds small modules, which is where design notes get parked.
+
+Three shapes, all of them the code's job rather than the doc's: a rule stated as prose and
+enforced nowhere (a contract every caller must honour — write the function that applies it), prose
+restating data held elsewhere (a set spelled out in a doc while the code reads it from config),
+and a design note about a different system entirely.
+
+Expect a large first reading on an existing codebase — `credo diff` absorbs it as the baseline.
+Load-bearing docs for *this* code are the case for `# credo:disable-for-next-line`.
+
 ### `EnumAtInLoop` (refactor)
 
 Flags `Enum.at(enumerable, i)` with a computed index inside `Enum.*`/`Stream.*` iteration,
