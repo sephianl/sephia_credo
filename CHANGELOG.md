@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-09-25
+
+### Changed
+
+- `DisproportionateModuleDoc`'s message no longer says the surplus prose "belongs in a function". Read at the call site that meant a function's `@doc`, and following it cleared the report by moving the same paragraphs one level down, still enforcing nothing — one fix did exactly that, and one of the relocated docs was wrong about what its function did. The message now says to make the prose unnecessary with names, patterns and guards, and that moving it into a `@doc` only relocates it; the check's explanation, the README and `usage-rules.md` say the same.
+
 ## [0.8.0] - 2026-09-22
 
 ### Added

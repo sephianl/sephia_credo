@@ -111,6 +111,9 @@ enforced nowhere (a contract every caller must honour — write the function tha
 restating data held elsewhere (a set spelled out in a doc while the code reads it from config),
 and a design note about a different system entirely.
 
+Moving the prose into the functions' `@doc`s is not a fix: it clears the report and enforces
+nothing. Make the paragraph unnecessary with a better name, a pattern or a guard.
+
 Expect a large first reading on an existing codebase — `credo diff` absorbs it as the baseline.
 Load-bearing docs for *this* code are the case for `# credo:disable-for-next-line`.
 

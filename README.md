@@ -183,7 +183,7 @@ defmodule Oban.SnoozePolicy do
 end
 ```
 
-Fourteen lines of doc over one line of code, and the second paragraph is a contract every caller must honour that nothing enforces — which is the tell. A rule worth writing down belongs in a function that applies it, here one returning `{:cancel, reason}` rather than a boolean and a paragraph about what to do with it.
+Fourteen lines of doc over one line of code, and the second paragraph is a contract every caller must honour that nothing enforces — which is the tell. A rule worth writing down belongs in a function that applies it, here one returning `{:cancel, reason}` rather than a boolean and a paragraph about what to do with it. Moving the prose into the functions' `@doc`s is not that: it clears the report and leaves the rule exactly as unenforced.
 
 Two further shapes it finds: prose restating data that lives elsewhere (a trusted-proxy set spelled out in a doc while the code reads it from config, the two free to drift), and a design note about a *different* system parked in whichever module felt topical — solver semantics, wire formats, a dependency's behaviour — documenting nothing the file contains.
 

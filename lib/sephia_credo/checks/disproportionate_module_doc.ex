@@ -41,6 +41,10 @@ defmodule SephiaCredo.Checks.DisproportionateModuleDoc do
       applies it, here one returning `{:cancel, reason}` rather than a boolean
       and a paragraph explaining what to do with it.
 
+      Moving the prose into the functions' `@doc`s is not that. It clears the
+      report and leaves the rule exactly as unenforced; what makes a paragraph
+      unnecessary is a better name, a pattern or a guard.
+
       The other two shapes this finds:
 
         * prose restating data that lives elsewhere — a trusted-proxy set
@@ -160,9 +164,10 @@ defmodule SephiaCredo.Checks.DisproportionateModuleDoc do
       issue_meta,
       message:
         "This `@moduledoc` is long relative to the module it documents, which usually means the " <>
-          "prose is carrying a rule, a contract or a data set the code should carry. State what " <>
-          "the module is and what the code cannot say; the rest belongs in a function or in the " <>
-          "pull request.",
+          "prose is carrying a rule, a contract or a data set the code should carry. Keep what the " <>
+          "module is for and what the code cannot say. Make the rest unnecessary with names, " <>
+          "patterns and guards; moving it into a function's `@doc` only relocates it. History " <>
+          "and alternatives belong in the pull request.",
       trigger: "@moduledoc",
       line_no: line_no
     )
