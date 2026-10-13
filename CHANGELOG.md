@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-13
+
+### Added
+
+- `ProjectImport` *(Design)* — flags `import` of the project's own modules and asks for an alias. An imported function is called without its module, so a search for the module misses its callers and dead functions hide behind the import, and the importer becomes a compile-time dependent of the imported module. The project's modules default to the Mix app's module and its `Web` module; `project_modules` overrides them and `allowed` lists modules that may still be imported, such as ones whose macros Ash expressions call unqualified. Imports inside a `quote` (what `use MyAppWeb` hands out), imports that supply a function plug (`phx.gen.auth`'s `import MyAppWeb.UserAuth` in the router) and test files are not reported. Enabled in the generated config.
+
+Three opt-in *(Design)* checks that hold a codebase to one layout. None is in the generated config: they encode a convention rather than a pitfall.
+
+- `ModuleLayout` — flags a module under `included_paths` whose file path does not spell its name, and names the path it belongs at. `resources` is a folder and never part of a name, acronyms that underscore differently from their file (`PostHogLogs` in `posthog_logs.ex`) are accepted, a domain module may sit in its own folder (`lib/my_app/geography/geography.ex`), and Ash resource code is skipped.
+- `TestLayout` — flags a `<Module>Test` whose file does not mirror `<Module>`'s file, allowing split-off `<module>_<part>_test.exs` files beside the main one. Like `UniqueModuleName`, it reads `lib_paths` from the tree the checked file is in.
+- `UniqueModuleName` — flags two modules under `included_paths` ending in the same name, since `alias A.DepotDay` then `alias B.DepotDay` compiles and every later `DepotDay` means the second. It reads `included_paths` from the folder holding the checked file's `lib/`, not the working directory, so `credo diff`'s merge-base pass reads the merge-base tree.
+
 ## [0.8.1] - 2026-09-25
 
 ### Changed

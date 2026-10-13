@@ -27,7 +27,7 @@ Add `sephia_credo` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sephia_credo, "~> 0.7", only: [:dev, :test], runtime: false}
+    {:sephia_credo, "~> 0.9", only: [:dev, :test], runtime: false}
   ]
 end
 ```
@@ -58,6 +58,7 @@ mix deps.get
           {SephiaCredo.Checks.PatternMatchInFunctionHead, []},
           {SephiaCredo.Checks.PreloadInLoop, []},
           {SephiaCredo.Checks.ProcessSleepInTests, []},
+          {SephiaCredo.Checks.ProjectImport, allowed: ["MyAppWeb.CoreComponents"]},
           {SephiaCredo.Checks.RawRuntimeError, []},
           {SephiaCredo.Checks.RepoInAshResource, []},
           {SephiaCredo.Checks.ShadowedAlias, []},
@@ -69,6 +70,10 @@ mix deps.get
           {SephiaCredo.Checks.UtcCalendarDate, local_date_call: "LocalTime.today()"}
           # Opt-in (not enabled by default):
           # {SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll, []}
+          # Layout, opt-in: they encode a folder convention, see "Layout checks" below.
+          # {SephiaCredo.Checks.ModuleLayout, included_paths: ["lib/my_app/"]},
+          # {SephiaCredo.Checks.TestLayout, []},
+          # {SephiaCredo.Checks.UniqueModuleName, included_paths: ["lib/my_app/"]}
         ]
       }
     }
@@ -110,6 +115,7 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `PatternMatchInFunctionHead` | Refactor | Flags a single-clause function whose whole body is a `case` on one of its own parameters |
 | `PreloadInLoop` | Warning | Flags `Repo.preload` / `Ash.load` inside `Enum.*`, `Stream.*`, `Task.async_stream` or `for` — one query per element (N+1) |
 | `ProcessSleepInTests` | Refactor | Flags `Process.sleep` in `*_test.exs` files — causes flakes and slows the suite |
+| `ProjectImport` | Design | Flags `import` of the project's own modules — callers stop being searchable and the importer becomes a compile-time dependent |
 | `RawRuntimeError` | Warning | Flags `raise "msg"` and `raise RuntimeError, ...` — error trackers can't group these meaningfully |
 | `RepoInAshResource` | Warning | Flags a statement-executing `Repo` call inside an Ash resource, change, validation, calculation or preparation — no tenant scoping, no notifications, no authorization |
 | `ShadowedAlias` | Warning | Flags two aliases in one scope sharing a final segment — every call resolves to the second and the first is unreachable, with no compiler warning |
@@ -120,6 +126,14 @@ Both setup-key checks now follow a context handed to a `def`/`defp` in the same 
 | `UnusedSetupKeysInTests` | Design | Flags `setup` fixture work no test in scope reads — the unused-variable warning the compiler can't give you |
 | `UnusedSetupKeysPerTest` | Design | Flags a test that consumes none of the setup keys in scope for it |
 | `UtcCalendarDate` | Warning | Flags a calendar date taken from the UTC clock — `Date.utc_today()`, or `utc_now()` collapsed with `to_date/1` — which is the previous day's date for the first hours of every local day |
+
+Layout checks, opt-in — see [Layout checks](#layout-checks-opt-in):
+
+| Check | Category | Description |
+|---|---|---|
+| `ModuleLayout` | Design | Flags a module under `included_paths` whose file path does not spell its name |
+| `TestLayout` | Design | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/` |
+| `UniqueModuleName` | Design | Flags two modules under `included_paths` ending in the same name — their aliases silently shadow each other |
 
 ### AppendInLoop
 
@@ -242,6 +256,17 @@ Only the parts of a loop that run per element are examined — the lambda handed
 `Process.sleep/1` in test bodies, `setup` blocks, or `setup_all` blocks causes timing-dependent flakes and slows the suite linearly. Prefer `assert_receive`, `assert_eventually`, or a polling helper. Test files only (`*_test.exs`).
 
 A sleep inside a bounded retry helper is exempt — a `def`/`defp` that calls itself with one argument decremented by a literal is the polling helper this check asks for, and its sleep is the backoff between attempts, not a guess at how long the work takes.
+
+### ProjectImport
+
+An imported function is called without its module, so a search for the module misses its callers and a dead function hides behind the import. The import also makes the importer a compile-time dependent of the imported module, widening what an edit recompiles; an alias does not. Function components follow the same rule: `<ListRoutesHelpers.stop_row />` works as well as `<.stop_row />`.
+
+The project's modules default to the Mix app's module and its `Web` module (`:my_app` → `MyApp`, `MyAppWeb`); `project_modules` overrides that, which an umbrella root needs. An import inside a `quote` is not reported: that is what `use MyAppWeb` hands every caller, so list those modules in `allowed` instead, along with any whose macros must be called unqualified. Test files and `test/support` are exempt. So is an import that supplies a function plug, like `phx.gen.auth`'s `import MyAppWeb.UserAuth` in the router, since `plug :fetch_current_scope_for_user` and `pipe_through [:require_authenticated_user]` only resolve a local or imported function.
+
+```elixir
+{SephiaCredo.Checks.ProjectImport,
+ allowed: ["MyAppWeb.CoreComponents", "MyApp.TimeExpressions"]}
+```
 
 ### RawRuntimeError
 
@@ -367,6 +392,20 @@ Test files are checked too, and exempting them is what lets the drift back in: a
 ```
 
 A project that genuinely keys its data on the UTC day should disable this check rather than fight it. Individual UTC-keyed values — a UTC-partitioned object key, a retention cutoff defined in UTC — are the case for `# credo:disable-for-next-line`.
+
+## Layout checks *(opt-in)*
+
+Three checks hold a codebase to one convention: a module lives at the path its name spells, a test mirrors its module's file, and no two modules end in the same name. They are not in the generated config because they encode a layout rather than a pitfall; enable the ones whose layout you follow.
+
+```text
+MyApp.Planner.Solver.ModelBuilder  lib/my_app/planner/solver/model_builder.ex
+MyApp.Geography                    lib/my_app/geography/geography.ex
+MyApp.Planner.Route.Worker         lib/my_app/planner/resources/route/worker.ex
+```
+
+A domain module may sit in its own folder, as `MyApp.Geography` does, and `resources` is a folder that is never part of a name, so it is ignored on both sides. `ModuleLayout` skips Ash resource code, whose placement is a convention of its own. The fix for `ModuleLayout` and `TestLayout` is a `git mv` that keeps the module name; for `UniqueModuleName` it is a rename.
+
+`UniqueModuleName` and `TestLayout` read modules from other files, once per run. They resolve `included_paths` and `lib_paths` against the folder holding the checked file's `lib/` or `test/`, so in `credo diff` the merge-base pass reads the merge-base tree.
 
 ## Usage rules for AI agents
 

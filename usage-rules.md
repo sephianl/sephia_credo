@@ -206,6 +206,16 @@ A sleep inside a bounded retry helper — a `def`/`defp` that calls itself with 
 decremented by a literal — is exempt. That sleep is the backoff between attempts, which is what the
 fix above asks you to write.
 
+### `ProjectImport` (design)
+
+Flags `import` of the project's own modules outside test files and `quote` blocks. An import that
+supplies a `plug :name` or `pipe_through` function plug is not reported.
+
+Fix by aliasing the module and qualifying its calls, components included (`<Helpers.row />`). Do
+not move the import into a `quote` or a test-support module to dodge the report. A module whose
+macros must be called unqualified belongs in `allowed`, and adding it there is the project's call,
+not a fix to make silently.
+
 ### `RawRuntimeError` (warning)
 
 Flags `raise "msg"` and `raise RuntimeError, ...`. Error trackers group by exception module, so
@@ -370,3 +380,16 @@ genuinely UTC-keyed value — a UTC-partitioned object key, a retention cutoff d
 filename prefix that only has to be stable — is correct as written and wants
 `# credo:disable-for-next-line`. What decides it is the other side of the comparison: if the date is
 handed to something that resolves dates in a local zone, it is a defect.
+
+### Layout checks (design, opt-in)
+
+`ModuleLayout`, `TestLayout` and `UniqueModuleName` judge where a file sits and what its module is
+called.
+
+Fix a placement report with a `git mv` that keeps the module name, and move the module's test in the
+same change. Do not rename the module to match where the file happens to be: other code, and
+anything stored outside it (Oban job args, serialized terms, registered names), refers to it by name.
+
+Fix a `UniqueModuleName` report by renaming, and before renaming search for the
+name outside the code too. **Do not silence a layout report to finish a change** — the layout is the
+convention the project opted into; if the check is wrong about it, say so.
