@@ -147,6 +147,23 @@ defmodule SephiaCredo.Checks.AssertWithoutAssertionTest do
       |> refute_issues()
     end
 
+    test "does not flag a module attribute in the pattern" do
+      ~S"""
+      defmodule Sample.MyTest do
+        use ExUnit.Case
+
+        @expected 42
+
+        test "thing" do
+          assert {:ok, %{value: @expected}} = some_call()
+        end
+      end
+      """
+      |> to_source_file("my_test.exs")
+      |> run_check(AssertWithoutAssertion)
+      |> refute_issues()
+    end
+
     test "does not flag underscore-prefixed binding" do
       ~S"""
       defmodule Sample.MyTest do

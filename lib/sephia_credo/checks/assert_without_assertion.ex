@@ -104,7 +104,7 @@ defmodule SephiaCredo.Checks.AssertWithoutAssertion do
   defp bound_vars(pattern) do
     {_ast, vars} =
       Macro.prewalk(pattern, [], fn
-        {:^, _, _}, acc ->
+        {op, _, _}, acc when op in [:^, :@] ->
           {[], acc}
 
         {name, _meta, ctx} = node, acc
