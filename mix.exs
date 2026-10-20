@@ -10,7 +10,7 @@ defmodule SephiaCredo.MixProject do
       app: :sephia_credo,
       version: @version,
       description: @description,
-      elixir: "~> 1.15",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       elixirc_paths: elixirc_paths(Mix.env()),
