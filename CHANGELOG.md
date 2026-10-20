@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-20
+
+### Fixed
+
+- `AssertWithoutAssertion` no longer reads a module attribute in the pattern as a bound variable. `assert {:ok, %Ledger{driving_this_week_s: @route_drive_s}} = expr` binds nothing, but the check took `route_drive_s` for a variable, found it unused afterwards, and reported the assert as vacuous. It now skips `@attr` the way it already skipped `^pinned`.
+
 ## [0.9.0] - 2026-10-13
 
 ### Added
