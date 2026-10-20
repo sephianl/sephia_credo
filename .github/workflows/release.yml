@@ -18,13 +18,13 @@ jobs:
           # Tags are what the guard below reads; the default depth fetches none.
           fetch-depth: 0
 
-      # Kept in step with devenv.nix, which pins elixir_1_19 on OTP 28. No
+      # Kept in step with devenv.nix, which pins elixir_1_20 on OTP 29. No
       # dependency cache here: a release is cut rarely and is worth building
       # from scratch.
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19"
-          otp-version: "28"
+          elixir-version: "1.20"
+          otp-version: "29"
 
       - name: Get version
         id: version
