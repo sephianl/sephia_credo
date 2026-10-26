@@ -322,7 +322,39 @@ defmodule SephiaCredo.AshCall do
   defp literal_list?(list) when is_list(list), do: Macro.quoted_literal?(list)
   defp literal_list?(_body), do: false
 
+  # Only the project's own modules wrap an insert worth finding, and a module's
+  # definitions are read once per run: decoding debug info for every remote call
+  # into `Enum` or `Ash.Changeset` would cost more than the rest of the check.
   defp compiled_definitions(module) do
+    if project_module?(module), do: cached_definitions(module), else: :error
+  end
+
+  defp project_module?(module) do
+    Code.ensure_loaded?(module) and
+      case module.module_info(:compile)[:source] do
+        nil -> false
+        source -> project_source?(to_string(source))
+      end
+  end
+
+  defp project_source?(source),
+    do: String.starts_with?(source, File.cwd!()) and not String.contains?(source, "/deps/")
+
+  defp cached_definitions(module) do
+    key = {__MODULE__, :definitions, module, module.module_info(:md5)}
+
+    case :persistent_term.get(key, :missing) do
+      :missing ->
+        definitions = read_definitions(module)
+        :persistent_term.put(key, definitions)
+        definitions
+
+      definitions ->
+        definitions
+    end
+  end
+
+  defp read_definitions(module) do
     with {^module, beam, _path} <- :code.get_object_code(module),
          {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}]}} <-
            :beam_lib.chunks(beam, [:debug_info]),
@@ -545,19 +577,31 @@ defmodule SephiaCredo.AshCall do
   end
 
   defp reach(index, defs) do
-    next =
-      Map.new(index, fn {key, clauses} ->
-        {key, Enum.map(clauses, &reach_clause(&1, index, defs))}
+    index
+    |> Map.new(fn {key, clauses} ->
+      {key, Enum.map(clauses, &Map.put(&1, :locals, local_calls(&1.body, defs)))}
+    end)
+    |> reach_until_stable()
+  end
+
+  defp reach_until_stable(index) do
+    {next, changed?} =
+      Enum.map_reduce(index, false, fn {key, clauses}, changed? ->
+        {clauses, clause_changed?} = Enum.map_reduce(clauses, false, &reach_clause(&1, &2, index))
+        {{key, clauses}, changed? or clause_changed?}
       end)
 
-    if next == index, do: index, else: reach(next, defs)
+    if changed?, do: reach_until_stable(Map.new(next)), else: index
   end
 
-  defp reach_clause(%{call: nil, body: body} = clause, index, defs) do
-    %{clause | call: body |> local_calls(defs) |> Enum.find_value(&through(&1, index))}
+  defp reach_clause(%{call: nil, locals: locals} = clause, changed?, index) do
+    case Enum.find_value(locals, &through(&1, index)) do
+      nil -> {clause, changed?}
+      call -> {%{clause | call: call}, true}
+    end
   end
 
-  defp reach_clause(clause, _index, _defs), do: clause
+  defp reach_clause(clause, changed?, _index), do: {clause, changed?}
 
   @doc "The round-trip call a local call reaches through the clauses its arguments can match."
   def local_call_cost(index, key, args) do
