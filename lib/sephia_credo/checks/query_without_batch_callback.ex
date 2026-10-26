@@ -22,10 +22,14 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
 
       For a change, `batch_change/3` replaces `change/3` in bulk actions, and
       `before_batch/3` and `after_batch/3` replace its `before_action` and
-      `after_action` hooks. A hook that writes to another resource can instead
-      emit an `:after_action` signal (`Ash.Signals`): in a bulk action Ash
-      emits it once per batch, and a create, update or destroy listener
-      handles the signals emitted together as one bulk action.
+      `after_action` hooks. A hook that tells another resource what happened
+      can instead emit an `:after_action` signal (`Ash.Signals`), declared on
+      the action with `emit MySignals, :name, fields: [...]`, or emitted with
+      `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that
+      is not an attribute. A bulk action emits `:after_action` signals once per
+      batch (`:after_transaction` ones once per record), and a create, update
+      or destroy listener handles them as one bulk action; a generic action
+      listener needs `batch?: true` to receive them together.
 
       An `Ash.Notifier`'s `notify/1` runs once per notification, so once per
       record of a bulk action. What it reads belongs in `load/2`, which Ash
@@ -44,6 +48,12 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
     {[:Ash, :Resource, :Validation], {:validate, 3}, {:batch_validate, 3}},
     {[:Ash, :Resource, :Change], {:change, 3}, {:batch_change, 3}}
   ]
+
+  @signal_advice "When the work tells another resource what happened, emit an `:after_action` " <>
+                   "signal instead (`emit MySignals, :name, fields: [...]` on the action, or " <>
+                   "`Ash.Signals.emit_many/5` from `after_batch/3` for data that is not an attribute): " <>
+                   "a bulk action emits it once per batch, and a create, update or destroy listener, " <>
+                   "or a generic one with `batch?: true`, handles the batch in one call."
 
   @impl true
   def run(source_file, params \\ []) do
@@ -103,8 +113,8 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
 
   defp notifier_advice(_write),
     do:
-      "A notifier has no batch callback; an `:after_action` signal (`Ash.Signals`) reaches its " <>
-        "listener once per batch, and a create, update or destroy listener handles it as one bulk action."
+      "`notify/1` has no batch form. If the write may run inside the action's transaction: " <>
+        @signal_advice
 
   @hooks [:before_action, :after_action, :after_transaction]
 
@@ -163,6 +173,5 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
   defp advice({:change, 3}, true),
     do:
       "Define `batch_change/3` and move the hook's work to `after_batch/3`, which gets every " <>
-        "record of the batch, or emit an `:after_action` signal (`Ash.Signals`): Ash emits it " <>
-        "once per batch and a create, update or destroy listener handles the batch as one bulk action."
+        "record of the batch. " <> @signal_advice
 end
