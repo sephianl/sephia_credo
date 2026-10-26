@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+Five opt-in checks for queries that multiply with the rows. The three Ash ones read the compiled project, as `ash_credo` does, so run Credo after `mix compile`.
+
+- `AshActionInLoop` *(Warning)* — flags an `Ash` action, an Ash code interface, a repo call or an Oban insert that runs once per element of a loop, directly or through a local function, including a local function that calls a lambda per element. Loops over a list literal, a module attribute, `Enum.group_by/2` or `Enum.chunk_every/2`, and bulk calls per chunk, are not reported.
+- `QueryWithoutBatchCallback` *(Warning)* — flags a validation whose `validate/3`, or a change whose `change/3` or the hooks it adds, queries without the module defining `batch_validate/3` or `batch_change/3`, so the query runs per record in every bulk action.
+- `UnneededRequireAtomicFalse` *(Warning)* — flags `require_atomic? false` on an update or destroy that Ash builds atomically (`Ash.Changeset.fully_atomic_changeset/4`), which makes a bulk action stream records and authorize them one by one. Reads actions in a `Spark.Dsl.Fragment` from the enclosing resource.
+- `RollbackOnSuccess` *(Warning)* — flags a transaction that rolls back on its `{:ok, _}` path, a preview that runs every write and hook to throw them away.
+- `DeepLoad` *(Refactor, informational)* — flags a literal load tree with more than `max_nodes` (6) nodes, following module attributes; each relationship in it is its own query.
+
 ### Changed
 
 - Requires Elixir 1.19 or later, up from 1.15. CI now compiles and tests on Elixir 1.19 with OTP 26, the oldest pair that requirement allows, so it is checked rather than assumed.

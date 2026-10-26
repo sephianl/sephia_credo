@@ -60,12 +60,12 @@ defmodule SephiaCredo.Checks.UndefinedDocReferenceTest do
     test "a bare single word carrying an arity, which is unambiguous" do
       """
       defmodule Zelo.Planner.Docs do
-        @moduledoc "Taken by `Lock.acquire/2` before the build."
+        @moduledoc "Taken by `Turnstile.acquire/2` before the build."
       end
       """
       |> to_source_file()
       |> run_check(UndefinedDocReference)
-      |> assert_issue(fn issue -> assert issue.trigger == "Lock" end)
+      |> assert_issue(fn issue -> assert issue.trigger == "Turnstile" end)
     end
   end
 
