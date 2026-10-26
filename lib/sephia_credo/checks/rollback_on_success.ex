@@ -19,7 +19,8 @@ defmodule SephiaCredo.Checks.RollbackOnSuccess do
       Predict the outcome from what the writes would read: load that state
       once and compute the effects in memory, without writing. A rollback on
       the error path is fine; this flags a rollback on the `{:ok, _}` path or
-      as the transaction's last expression.
+      as the transaction's last expression. `{:ok, nil}`, `{:ok, false}` and
+      `{:ok, []}` count as a read that found nothing, so not as success.
       """
     ]
 

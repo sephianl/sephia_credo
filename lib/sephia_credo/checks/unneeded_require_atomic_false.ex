@@ -26,6 +26,13 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
       declines without its input leaves the action unreported. Actions in a
       `Spark.Dsl.Fragment` are read from the nearest enclosing resource
       (`User.Actions` from `User`). Run Credo after `mix compile`.
+
+      Building atomically is not the same as behaving the same: a change whose
+      `atomic/3` leaves out a hook its `change/3` adds stops running that hook
+      on the atomic path. The message names such changes; give them the hook
+      in `atomic/3` before removing the option. An `atomic/3` that inspects
+      the action's input can still decline once input is given, which the
+      tests will show.
       """
     ]
 

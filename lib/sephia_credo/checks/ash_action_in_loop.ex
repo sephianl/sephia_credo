@@ -34,6 +34,20 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
       per chunk, are not reported. Run Credo after `mix compile`. `Ash.load`
       and `Repo.preload` directly in a loop are left to
       `SephiaCredo.Checks.PreloadInLoop`.
+
+      What the check cannot see:
+
+        * a collection that holds at most one element for a reason outside
+          the code, such as a unique index or `top: 1` on an external API.
+          Saying so in the code (match `[row]`, or update by query) helps the
+          next reader as much as the check;
+        * a loop that is sequential on purpose: each step reads what the
+          previous one wrote, or locks are taken one by one in a fixed order.
+
+      Mark those with the reason, so the next reader knows it was decided:
+
+          # credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
+          # Each route departs when the previous one ends.
       """
     ]
 

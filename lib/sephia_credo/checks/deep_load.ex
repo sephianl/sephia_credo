@@ -30,6 +30,11 @@ defmodule SephiaCredo.Checks.DeepLoad do
       relationship, such as a count, an existence check or a field of the
       first row, an aggregate or an expression calculation returns it in the
       main query.
+
+      The count is a lower bound: a module calculation can load relationships
+      of its own, and a load the check cannot resolve to a resource is not
+      counted. `max_relationships` is a budget, not a rule; a load that needs
+      every relationship it names is fine to keep.
       """,
       params: [
         max_relationships: "The most relationships a single load may name before it is reported."

@@ -437,6 +437,17 @@ A call counts as a database call only when it certainly is one: the `Ash` read a
 
 **`DeepLoad`** counts relationships from the compiled resource, only where it knows the resource: a read action's `prepare build(load: ...)`, a code interface's `load:`, and `Ash.read/2`, `Ash.get/3` or `Ash.Query.load/2` on a named resource. Module attributes are followed anywhere in the tree. Manual relationships and ones into resources kept in memory are not counted.
 
+### Edge cases
+
+Run against two production Ash codebases (about 630 reports), three reports were wrong, and all three for the same reason: a collection that holds at most one element because of something outside the code, a partial unique index or `top: 1` on an external API. Some ten to fifteen more were right but deliberate: a loop where each step reads what the previous one wrote, locks taken one by one in a fixed order, a per-row fallback after a bulk insert failed. Neither is visible in the code, so the checks cannot tell. Make the single row explicit in the code, or mark a deliberate case with its reason:
+
+```elixir
+# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
+# Each route departs when the previous one ends.
+```
+
+`QueryWithoutBatchCallback` reports a module whatever actions use it: a change only single-record actions use costs nothing extra until one of them runs in bulk. `mix credo explain` lists each check's limits.
+
 ## Usage rules for AI agents
 
 This package ships a [usage-rules.md](usage-rules.md) consumed by [usage_rules](https://hexdocs.pm/usage_rules). It documents how to respond to each check — in particular, that a report is a suspicion to verify rather than a licence to delete code:

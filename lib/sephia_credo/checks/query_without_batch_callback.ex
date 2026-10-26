@@ -39,6 +39,13 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
       and non-atomic updates still go through `validate/3` and `change/3`.
       A call counts when it certainly reaches the database, as in
       `SephiaCredo.Checks.AshActionInLoop`. Run Credo after `mix compile`.
+
+      What the check cannot see: which actions use the module, and whether any
+      of them runs in bulk. A change only single-record actions use costs one
+      query per call today, and becomes one per record the day an action that
+      uses it runs in bulk. Nor does it see a context flag that bulk callers set
+      to skip the query. Where that is the design, say so with a
+      `# credo:disable-for-next-line` and the reason.
       """
     ]
 
