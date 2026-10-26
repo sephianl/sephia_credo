@@ -16,23 +16,58 @@ defmodule SephiaCredo.AshCall do
   when `mark_missing/2` is the one that writes.
   """
 
-  @compile {:no_warn_undefined, [Ash.Resource.Info, Ash.Domain.Info, Spark.Dsl]}
+  @compile {:no_warn_undefined, [Ash.Resource.Info, Ash.Domain.Info, Ash.DataLayer, Spark.Dsl]}
 
-  @ash_reads ~w(read read! read_one read_one! read_first read_first! get get! count count!
-                exists exists? aggregate aggregate! sum sum! max max! min min! avg avg!
-                first first! list list! calculate calculate! load load! stream!)a
-  @ash_writes ~w(create create! update update! destroy destroy! bulk_create bulk_create!
-                 bulk_update bulk_update! bulk_destroy bulk_destroy! run_action run_action!)a
-  @repo_reads ~w(get get! get_by get_by! one one! all exists? aggregate preload stream
-                 query query!)a
-  @repo_writes ~w(insert insert! update update! delete delete! insert_or_update
-                  insert_or_update! insert_all update_all delete_all)a
+  @ash_kinds Map.merge(
+               Map.from_keys(
+                 ~w(read read! read_one read_one! read_first read_first! get get! count count!
+                    exists exists? aggregate aggregate! sum sum! max max! min min! avg avg!
+                    first first! list list! load load! stream!)a,
+                 :read
+               ),
+               %{
+                 create: :create,
+                 create!: :create,
+                 bulk_create: :create,
+                 bulk_create!: :create,
+                 update: :update,
+                 update!: :update,
+                 bulk_update: :update,
+                 bulk_update!: :update,
+                 update_many: :update,
+                 update_many!: :update,
+                 destroy: :destroy,
+                 destroy!: :destroy,
+                 bulk_destroy: :destroy,
+                 bulk_destroy!: :destroy
+               }
+             )
+  @repo_kinds Map.merge(
+                Map.from_keys(
+                  ~w(get get! get_by get_by! one one! all exists? aggregate preload stream
+                     query query!)a,
+                  :read
+                ),
+                %{
+                  insert: :create,
+                  insert!: :create,
+                  insert_all: :create,
+                  insert_or_update: :create,
+                  insert_or_update!: :create,
+                  update: :update,
+                  update!: :update,
+                  update_all: :update,
+                  delete: :destroy,
+                  delete!: :destroy,
+                  delete_all: :destroy
+                }
+              )
   @oban_inserts ~w(insert insert! insert_all)a
-  @worker_callbacks ~w(new perform backoff timeout __opts__ module_info)a
+  @memory_data_layers [Ash.DataLayer.Simple, Ash.DataLayer.Ets, Ash.DataLayer.Mnesia]
 
   defmodule Call do
     @moduledoc "A call that costs a round trip: what it reads as, where it is, and what it does."
-    defstruct [:label, :line, :column, :kind, via: nil]
+    defstruct [:label, :line, :column, :kind, via: nil, batched?: false, element_query?: false]
   end
 
   @doc """
@@ -121,54 +156,216 @@ defmodule SephiaCredo.AshCall do
   """
   def remote_call({:&, _, [{:/, _, [{{:., _, [mod, fun]}, meta, []}, arity]}]}, module, aliases)
       when is_atom(fun) and is_integer(arity),
-      do: classify(expand(mod, module, aliases), mod, fun, meta)
+      do: classify(expand(mod, module, aliases), mod, fun, meta, nil)
 
   def remote_call({{:., _, [mod, fun]}, meta, args}, module, aliases)
-      when is_atom(fun) and is_list(args),
-      do: classify(expand(mod, module, aliases), mod, fun, meta)
+      when is_atom(fun) and is_list(args) do
+    case classify(expand(mod, module, aliases), mod, fun, meta, args) do
+      %Call{} = call -> %{call | element_query?: element_query?(args)}
+      nil -> nil
+    end
+  end
 
   def remote_call(_node, _module, _aliases), do: nil
 
-  defp classify([:Ash], _mod, fun, meta) do
-    cond do
-      fun in @ash_reads -> call("Ash.#{fun}", meta, :read)
-      fun in @ash_writes -> call("Ash.#{fun}", meta, :write)
-      true -> nil
-    end
+  # A load with `lazy?: true` only queries for what is not loaded yet.
+  defp classify([:Ash], _mod, fun, meta, args) when fun in [:load, :load!] and is_list(args) do
+    if Enum.any?(args, &lazy_option?/1),
+      do: nil,
+      else: maybe_call("Ash.#{fun}", meta, :read, false)
   end
 
-  defp classify([:Oban], _mod, fun, meta) when fun in @oban_inserts,
-    do: call("Oban.#{fun}", meta, :write)
+  defp classify([:Ash], _mod, fun, meta, _args),
+    do: maybe_call("Ash.#{fun}", meta, @ash_kinds[fun], bulk_api?(fun))
 
-  defp classify([_ | _] = segments, mod, fun, meta) do
+  defp classify([:Oban], _mod, fun, meta, _args) when fun in @oban_inserts,
+    do: %{call("Oban.#{fun}", meta, :job) | batched?: fun == :insert_all}
+
+  defp classify([_ | _] = segments, mod, fun, meta, args) do
     if List.last(segments) == :Repo,
       do: classify_repo(fun, meta, written(mod)),
-      else: classify_interface(Module.concat(segments), fun, meta, written(mod))
+      else: classify_module(Module.concat(segments), fun, meta, written(mod), args)
   end
 
-  defp classify(_segments, _mod, _fun, _meta), do: nil
+  defp classify(_segments, _mod, _fun, _meta, _args), do: nil
 
-  defp classify_repo(fun, meta, name) do
-    cond do
-      fun in @repo_reads -> call("#{name}.#{fun}", meta, :read)
-      fun in @repo_writes -> call("#{name}.#{fun}", meta, :write)
-      true -> nil
+  defp classify_repo(fun, meta, name) when fun in [:query, :query!],
+    do: call("#{name}.#{fun}", meta, :sql)
+
+  defp classify_repo(fun, meta, name),
+    do:
+      maybe_call(
+        "#{name}.#{fun}",
+        meta,
+        @repo_kinds[fun],
+        fun in [:insert_all, :update_all, :delete_all]
+      )
+
+  defp classify_module(module, fun, meta, name, args) do
+    case interface_kind(module, fun) do
+      nil -> maybe_call("#{name}.#{fun}", meta, job_kind(module, fun), false)
+      kind -> maybe_call("#{name}.#{fun}", meta, kind, bulk_interface_call?(args))
     end
   end
 
-  defp classify_interface(module, fun, meta, name) do
-    case interface_kind(module, fun) || worker_kind(module, fun) do
-      nil -> nil
-      kind -> call("#{name}.#{fun}", meta, kind)
+  defp maybe_call(_label, _meta, nil, _batched?), do: nil
+
+  defp maybe_call(label, meta, kind, batched?),
+    do: %{call(label, meta, kind) | batched?: batched?}
+
+  defp bulk_api?(fun),
+    do:
+      fun in [
+        :bulk_create,
+        :bulk_create!,
+        :bulk_update,
+        :bulk_update!,
+        :bulk_destroy,
+        :bulk_destroy!,
+        :update_many,
+        :update_many!
+      ]
+
+  # A code interface runs as a bulk action when it is handed `bulk_options:`,
+  # which nothing else accepts, or a query to update or destroy.
+  defp bulk_interface_call?(nil), do: false
+
+  defp bulk_interface_call?(args) do
+    Enum.any?(args, &keyword_with?(&1, :bulk_options)) or query_arg?(List.first(args))
+  end
+
+  defp keyword_with?({:++, _, [left, _right]}, key), do: keyword_with?(left, key)
+  defp keyword_with?([_ | _] = kw, key), do: Keyword.keyword?(kw) and Keyword.has_key?(kw, key)
+  defp keyword_with?(_arg, _key), do: false
+
+  defp query_arg?({{:., _, [{:__aliases__, _, [:Ash, :Query]}, _fun]}, _, _}), do: true
+  defp query_arg?(_arg), do: false
+
+  defp lazy_option?({:++, _, [left, _right]}), do: lazy_option?(left)
+
+  defp lazy_option?([_ | _] = kw),
+    do: Keyword.keyword?(kw) and Keyword.get(kw, :lazy?) == true
+
+  defp lazy_option?(_arg), do: false
+
+  # `Ash.count(query_fun.())`: the query comes out of the element, so each one
+  # is a different query rather than the same one per row.
+  defp element_query?([{{:., _, [{var, _, context}]}, _, _} | _])
+       when is_atom(var) and is_atom(context),
+       do: true
+
+  defp element_query?(_args), do: false
+
+  @doc """
+  `:job` when `fun` on `module` inserts an Oban job, read from the compiled
+  module: a function that calls `Oban.insert/2`, `Oban.insert!/2` or
+  `Oban.insert_all/2`, directly or through its own module's functions, the way
+  a worker's `enqueue/1` wraps its insert.
+  """
+  def job_kind(module, fun) do
+    with {:ok, definitions} <- compiled_definitions(module),
+         true <- inserts_job?(definitions, fun, MapSet.new()) do
+      if unique_worker?(module), do: :unique_job, else: :job
+    else
+      _ -> nil
     end
   end
 
-  # A worker's own functions besides building and running its job are how a
-  # project wraps `Oban.insert/2`, so calling one inserts a job.
-  defp worker_kind(module, fun) do
-    if fun not in @worker_callbacks and Code.ensure_loaded?(module) and
-         function_exported?(module, :__opts__, 0) and function_exported?(module, :perform, 1),
-       do: :write
+  defp unique_worker?(module) do
+    function_exported?(module, :__opts__, 0) and Keyword.has_key?(module.__opts__(), :unique)
+  end
+
+  @doc """
+  Whether a change module's `change/3` adds a `before_action`, `after_action`
+  or `after_transaction` hook that its `atomic/3` does not, read from the
+  compiled module. On the atomic path such a hook does not run, unless the
+  module also covers bulk actions with `after_batch/3` or `before_batch/3`.
+  """
+  def hook_skipped_when_atomic?(module) do
+    with {:ok, definitions} <- compiled_definitions(module),
+         {:ok, change} <- Map.fetch(definitions, :change),
+         {:ok, atomic} <- Map.fetch(definitions, :atomic) do
+      not Map.has_key?(definitions, :after_batch) and not Map.has_key?(definitions, :before_batch) and
+        adds_hook?(change) and not adds_hook?(atomic)
+    else
+      _ -> false
+    end
+  end
+
+  @hook_functions [:before_action, :after_action, :after_transaction]
+
+  defp adds_hook?(bodies) do
+    {_ast, found?} =
+      Macro.prewalk(bodies, false, fn
+        {{:., _, [Ash.Changeset, hook]}, _, _} = node, _acc when hook in @hook_functions ->
+          {node, true}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found?
+  end
+
+  @doc """
+  Whether a zero-arity `fun` on `module` returns a list literal on every
+  clause, read from the compiled module, where module attributes are already
+  inlined: `def entity_sets, do: @entity_sets`.
+  """
+  def constant_list?(module, fun) do
+    case compiled_definitions(module) do
+      {:ok, %{^fun => [_ | _] = bodies}} -> Enum.all?(bodies, &literal_list?/1)
+      _ -> false
+    end
+  end
+
+  defp literal_list?(list) when is_list(list), do: Macro.quoted_literal?(list)
+  defp literal_list?(_body), do: false
+
+  defp compiled_definitions(module) do
+    with {^module, beam, _path} <- :code.get_object_code(module),
+         {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}]}} <-
+           :beam_lib.chunks(beam, [:debug_info]),
+         {:ok, %{definitions: definitions}} <- backend.debug_info(:elixir_v1, module, data, []) do
+      {:ok,
+       Map.new(definitions, fn {{name, _arity}, _kind, _meta, clauses} ->
+         {name, bodies(clauses)}
+       end)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp bodies(clauses), do: Enum.map(clauses, fn {_meta, _args, _guards, body} -> body end)
+
+  defp inserts_job?(definitions, fun, seen) do
+    case Map.fetch(definitions, fun) do
+      {:ok, clauses} ->
+        seen = MapSet.put(seen, fun)
+        {direct?, locals} = scan_clauses(clauses, definitions)
+        direct? or Enum.any?(locals, &(&1 not in seen and inserts_job?(definitions, &1, seen)))
+
+      :error ->
+        false
+    end
+  end
+
+  defp scan_clauses(clauses, definitions) do
+    {_ast, found} =
+      Macro.prewalk(clauses, {false, []}, fn
+        {{:., _, [Oban, insert]}, _, _} = node, {_direct?, locals} when insert in @oban_inserts ->
+          {node, {true, locals}}
+
+        {name, _, args} = node, {direct?, locals} when is_atom(name) and is_list(args) ->
+          if Map.has_key?(definitions, name),
+            do: {node, {direct?, [name | locals]}},
+            else: {node, {direct?, locals}}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
   end
 
   defp written({:__aliases__, _, segments}), do: Enum.map_join(segments, ".", &written_segment/1)
@@ -181,9 +378,10 @@ defmodule SephiaCredo.AshCall do
     do: %Call{label: label, line: meta[:line], column: meta[:column], kind: kind}
 
   @doc """
-  What calling `fun` on `module` does when it is a code interface: `:read`,
-  `:write` or `:calculation`; `nil` when it is not one or the module is not
-  compiled.
+  The action type a code interface call runs, `:read`, `:create`, `:update` or
+  `:destroy`, when it certainly reaches the database. `nil` for anything else:
+  a generic action or a calculation interface, which may never query, a
+  resource kept in memory or embedded, or a module that is not compiled.
   """
   def interface_kind(module, fun) do
     cond do
@@ -198,14 +396,9 @@ defmodule SephiaCredo.AshCall do
 
   defp resource_interface_kind(resource, fun) do
     case Enum.find(Ash.Resource.Info.interfaces(resource), &interface_named?(&1, fun)) do
-      nil -> calculation_interface_kind(resource, fun)
+      nil -> nil
       interface -> action_kind(resource, interface.action || interface.name)
     end
-  end
-
-  defp calculation_interface_kind(resource, fun) do
-    if Enum.any?(Ash.Resource.Info.calculation_interfaces(resource), &interface_named?(&1, fun)),
-      do: :calculation
   end
 
   defp domain_interface_kind(domain, fun) do
@@ -216,23 +409,89 @@ defmodule SephiaCredo.AshCall do
         %{__struct__: Ash.Resource.Interface} = interface ->
           action_kind(reference.resource, interface.action || interface.name)
 
-        %{__struct__: Ash.Resource.CalculationInterface} ->
-          :calculation
-
-        nil ->
+        _other ->
           nil
       end
     end)
   end
 
+  @doc """
+  The resource a code interface call on `module` runs against, when `fun` is
+  one of its code interfaces; `nil` otherwise.
+  """
+  def interface_resource(module, fun) do
+    cond do
+      not ash_loaded?() or not Code.ensure_loaded?(module) ->
+        nil
+
+      Spark.Dsl.is?(module, Ash.Resource) ->
+        if Enum.any?(Ash.Resource.Info.interfaces(module), &interface_named?(&1, fun)), do: module
+
+      Spark.Dsl.is?(module, Ash.Domain) ->
+        module
+        |> Ash.Domain.Info.resource_references()
+        |> Enum.find_value(&defining_resource(&1, fun))
+
+      true ->
+        nil
+    end
+  end
+
+  defp defining_resource(reference, fun) do
+    if Enum.any?(reference.definitions, &interface_named?(&1, fun)), do: reference.resource
+  end
+
+  @doc """
+  The compiled resource a module's DSL belongs to: the module itself when it
+  `use`s `Ash.Resource`, and for a `Spark.Dsl.Fragment` the nearest enclosing
+  namespace that is a resource (`User.Actions` belongs to `User`), which is how
+  fragments are named. `nil` otherwise.
+  """
+  def resource_of(segments, body) do
+    cond do
+      uses?(body, [:Ash, :Resource]) ->
+        segments |> Module.concat() |> compiled_resource()
+
+      uses?(body, [:Spark, :Dsl, :Fragment]) ->
+        segments
+        |> Enum.drop(-1)
+        |> ancestors()
+        |> Enum.find_value(&compiled_resource(Module.concat(&1)))
+
+      true ->
+        nil
+    end
+  end
+
+  defp ancestors([]), do: []
+  defp ancestors(segments), do: [segments | ancestors(Enum.drop(segments, -1))]
+
+  defp compiled_resource(module) do
+    if ash_loaded?() and Code.ensure_loaded?(module) and Spark.Dsl.is?(module, Ash.Resource),
+      do: module
+  end
+
+  @doc "Whether `module` is a compiled Ash resource stored in a database."
+  def stored_resource?(module) do
+    ash_loaded?() and Code.ensure_loaded?(module) and Spark.Dsl.is?(module, Ash.Resource) and
+      stored?(module)
+  end
+
   defp interface_named?(%{name: name}, fun), do: fun == name or fun == :"#{name}!"
 
   defp action_kind(resource, action_name) do
-    case Ash.Resource.Info.action(resource, action_name) do
-      %{type: :read} -> :read
-      %{type: :action} -> :action
-      _write -> :write
+    with true <- stored?(resource),
+         %{type: type} when type in [:read, :create, :update, :destroy] <-
+           Ash.Resource.Info.action(resource, action_name) do
+      type
+    else
+      _ -> nil
     end
+  end
+
+  defp stored?(resource) do
+    not Ash.Resource.Info.embedded?(resource) and
+      Ash.DataLayer.data_layer(resource) not in @memory_data_layers
   end
 
   @doc """
@@ -260,34 +519,99 @@ defmodule SephiaCredo.AshCall do
   the function it called.
   """
   def costly_functions(body, module, aliases) do
+    body
+    |> reach_index(module, aliases)
+    |> Map.new(fn {key, clauses} -> {key, Enum.find_value(clauses, & &1.call)} end)
+  end
+
+  @doc """
+  Per local function, each clause's head parameters and the first round-trip
+  call that clause reaches, directly or through the module's own functions.
+  A call with literal arguments only reaches the clauses those literals can
+  match: `toggle(socket, id, true)` never runs the clause for `false`.
+  """
+  def reach_index(body, module, aliases) do
     defs = definitions(body)
 
-    direct =
-      Map.new(defs, fn {key, clauses} ->
-        {key, clauses |> calls_in(module, aliases) |> List.first()}
-      end)
-
-    reach(defs, direct)
+    body
+    |> clauses()
+    |> Map.new(fn {key, clauses} ->
+      {key,
+       Enum.map(clauses, fn clause ->
+         Map.put(clause, :call, clause.body |> calls_in(module, aliases) |> List.first())
+       end)}
+    end)
+    |> reach(defs)
   end
 
-  defp reach(defs, known) do
+  defp reach(index, defs) do
     next =
-      Map.new(defs, fn {key, clauses} ->
-        case known[key] do
-          nil -> {key, clauses |> local_calls(defs) |> Enum.find_value(&through(&1, known))}
-          call -> {key, call}
-        end
+      Map.new(index, fn {key, clauses} ->
+        {key, Enum.map(clauses, &reach_clause(&1, index, defs))}
       end)
 
-    if next == known, do: known, else: reach(defs, next)
+    if next == index, do: index, else: reach(next, defs)
   end
 
-  defp through({key, meta}, known) do
-    case known[key] do
+  defp reach_clause(%{call: nil, body: body} = clause, index, defs) do
+    %{clause | call: body |> local_calls(defs) |> Enum.find_value(&through(&1, index))}
+  end
+
+  defp reach_clause(clause, _index, _defs), do: clause
+
+  @doc "The round-trip call a local call reaches through the clauses its arguments can match."
+  def local_call_cost(index, key, args) do
+    index
+    |> Map.get(key, [])
+    |> Enum.filter(&can_match?(&1.params, args))
+    |> Enum.find_value(& &1.call)
+  end
+
+  defp through({key, meta, args}, index) do
+    case local_call_cost(index, key, args) do
       nil -> nil
       call -> %{call | via: {key, meta[:line]}}
     end
   end
+
+  defp can_match?(nil, _args), do: true
+  defp can_match?(_params, nil), do: true
+
+  defp can_match?(params, args) when length(params) == length(args),
+    do: params |> Enum.zip(args) |> Enum.all?(fn {param, arg} -> compatible?(param, arg) end)
+
+  defp can_match?(_params, _args), do: true
+
+  defp compatible?(param, arg) do
+    not (literal?(param) and literal?(arg) and param != arg)
+  end
+
+  defp literal?(value), do: is_atom(value) or is_number(value) or is_binary(value)
+
+  defp clauses(body) do
+    body
+    |> statements()
+    |> Enum.flat_map(&clause_heads/1)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp clause_heads({kind, _, [head, _kw]} = statement) when kind in [:def, :defp] do
+    params = head_params(head)
+
+    for {{_name, arity} = key, body} <- clause_definitions(statement) do
+      {key, %{params: if(params && length(params) == arity, do: params), body: body}}
+    end
+  end
+
+  defp clause_heads(_statement), do: []
+
+  defp head_params({:when, _, [head | _guards]}), do: head_params(head)
+
+  defp head_params({_name, _, params}) when is_list(params) do
+    if Enum.any?(params, &match?({:\\, _, _}, &1)), do: nil, else: params
+  end
+
+  defp head_params(_head), do: nil
 
   @doc "The `def`/`defp` clauses of a module body, keyed by every arity each can be called at."
   def definitions(body) do
@@ -312,16 +636,19 @@ defmodule SephiaCredo.AshCall do
   defp statements(nil), do: []
   defp statements(statement), do: [statement]
 
-  @doc "The calls to the module's own functions in `ast`, as `{{name, arity}, meta}`."
+  @doc """
+  The calls to the module's own functions in `ast`, as `{{name, arity}, meta,
+  args}`; `args` is `nil` for a `&name/arity` capture.
+  """
   def local_calls(ast, defs) do
     {_ast, calls} =
       Macro.prewalk(ast, [], fn
         {:&, _, [{:/, _, [{name, meta, context}, arity]}]} = node, acc
         when is_atom(name) and is_atom(context) and is_integer(arity) ->
-          {node, add_local({name, arity}, meta, defs, acc)}
+          {node, add_local({name, arity}, meta, nil, defs, acc)}
 
         {name, meta, args} = node, acc when is_atom(name) and is_list(args) ->
-          {node, add_local({name, length(args)}, meta, defs, acc)}
+          {node, add_local({name, length(args)}, meta, args, defs, acc)}
 
         node, acc ->
           {node, acc}
@@ -330,8 +657,15 @@ defmodule SephiaCredo.AshCall do
     Enum.reverse(calls)
   end
 
-  defp add_local(key, meta, defs, acc),
-    do: if(Map.has_key?(defs, key), do: [{key, meta} | acc], else: acc)
+  defp add_local(key, meta, args, defs, acc),
+    do: if(Map.has_key?(defs, key), do: [{key, meta, args} | acc], else: acc)
+
+  @doc "Whether a module body declares `@behaviour` for `module`, given as segments."
+  def behaviour?(body, segments) do
+    body
+    |> statements()
+    |> Enum.any?(&match?({:@, _, [{:behaviour, _, [{:__aliases__, _, ^segments}]}]}, &1))
+  end
 
   @doc "Whether a module body `use`s `module`, given as segments."
   def uses?(body, segments) do
@@ -341,8 +675,8 @@ defmodule SephiaCredo.AshCall do
   end
 
   @doc "How a call reads in a message: the call, and the local function it goes through."
-  def describe(%Call{label: label, via: nil}), do: "`#{label}`"
+  def describe(%Call{label: label, line: line, via: nil}), do: "`#{label}` (line #{line})"
 
   def describe(%Call{label: label, line: line, via: {{name, arity}, _line}}),
-    do: "`#{name}/#{arity}`, which reaches `#{label}` (line #{line}),"
+    do: "`#{name}/#{arity}`, which reaches `#{label}` (line #{line})"
 end

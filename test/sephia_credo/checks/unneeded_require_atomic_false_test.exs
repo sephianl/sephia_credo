@@ -45,6 +45,26 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     |> Enum.each(&refute(&1.line_no == 14))
   end
 
+  test "names a change whose hook the atomic path would skip" do
+    """
+    defmodule SephiaCredo.Fixtures.Bin do
+      use Ash.Resource
+
+      actions do
+        update :logged do
+          require_atomic? false
+          change SephiaCredo.Fixtures.LogMutation
+        end
+      end
+    end
+    """
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> assert_issue(fn issue ->
+      assert issue.message =~ "Before removing it: `SephiaCredo.Fixtures.LogMutation`"
+    end)
+  end
+
   test "reads a fragment's actions from the resource that includes it" do
     """
     defmodule SephiaCredo.Fixtures.Crate.Actions do

@@ -4,28 +4,35 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     category: :warning,
     explanations: [
       check: """
-      An Ash action, code interface or repo call inside `Enum.*`/`Stream.*`
-      iteration, `Task.async_stream` or a `for` comprehension runs one query
-      per element. So does a local function that makes such a call, called
-      once per element.
+      A call that reaches the database inside `Enum.*`/`Stream.*` iteration,
+      `Task.async_stream` or a `for` comprehension runs once per element. So
+      does a local function that makes such a call, called once per element.
 
           Enum.each(labels, &StorageItem.set_zone(&1, zone_id, opts))
           Enum.reduce_while(verdicts, {:ok, []}, fn verdict, {:ok, acc} ->
             case load_scan(verdict, opts) do ...  # load_scan/2 reads per verdict
 
-      Each one looks harmless, but a hook that queries runs again for every
-      element, so the round trips multiply. Do the work for the whole list at
-      once:
+      Each action's own hooks and validations run again for every element,
+      so the round trips multiply. Do the work for the whole list at once:
 
           # reads: one query for all of them, then look each up in a map
           StorageItem.by_codes(codes, opts)
 
-          # writes: one bulk action
+          # the same input for every record
           Ash.bulk_update(storage_items, :set_zone, %{zone_id: zone_id}, opts)
 
-      Code interfaces are recognised from the compiled resource, so run Credo
-      after `mix compile`; without it only `Ash.*` and `Repo.*` calls are seen.
-      `Ash.load` and `Repo.preload` directly in a loop are left to
+          # each record its own input, one MERGE when the changes are atomic
+          Ash.update_many(Enum.map(items, &{&1, %{position: &1.position}}), Item, :move, opts)
+
+      A call counts when it certainly reaches the database: the `Ash` read and
+      write API, an Ecto repo, `Oban.insert/2`, a code interface of a
+      create, read, update or destroy action on a resource with a database
+      data layer, and a function the compiled module shows calling
+      `Oban.insert/2`. Generic actions and calculation interfaces may never
+      query, so they are not counted. A loop over a list literal, a module
+      attribute, `Enum.group_by/2` or `Enum.chunk_every/2`, and one bulk call
+      per chunk, are not reported. Run Credo after `mix compile`. `Ash.load`
+      and `Repo.preload` directly in a loop are left to
       `SephiaCredo.Checks.PreloadInLoop`.
       """
     ]
@@ -47,25 +54,77 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     |> AshCall.modules()
     |> Enum.flat_map(&module_calls/1)
     |> Enum.uniq_by(&{&1.line, &1.column})
+    |> innermost_only()
     |> Enum.sort_by(&{&1.line, &1.column})
     |> Enum.map(&issue(&1, issue_meta))
   end
 
+  # A helper that loops over its own collection is reported at its own loop;
+  # an outer loop calling the helper reports the same call a second time.
+  defp innermost_only(calls) do
+    direct = MapSet.new(for %{via: nil, line: line} <- calls, do: line)
+
+    Enum.reject(calls, fn
+      %{via: {_key, reached}} -> MapSet.member?(direct, reached)
+      _direct -> false
+    end)
+  end
+
   defp module_calls({module, body, aliases}) do
-    costly = AshCall.costly_functions(body, module, aliases)
+    index = AshCall.reach_index(body, module, aliases)
     defs = AshCall.definitions(body)
+    fixed_node? = fixed_node_fun(module, body, aliases)
 
     body
-    |> SephiaCredo.Loop.data_driven_regions()
+    |> SephiaCredo.Loop.data_driven_regions(fixed_node?)
     |> Enum.concat(helper_regions(body))
     |> Enum.flat_map(fn region ->
-      direct =
-        region |> AshCall.calls_in(module, aliases) |> Enum.reject(&(preload?(&1) or batch?(&1)))
-
-      direct ++ through_locals(region, defs, costly)
+      direct = region |> AshCall.calls_in(module, aliases) |> Enum.reject(&preload?/1)
+      direct ++ through_locals(region, defs, index)
     end)
-    |> Enum.reject(&batch?/1)
+    |> Enum.reject(&(&1.batched? or &1.element_query?))
   end
+
+  # A collection is fixed when it is a variable bound to a list literal or
+  # module attribute, or a call to a zero-arity function the compiled module
+  # shows returning a list literal, such as `Webhook.entity_sets()`.
+  defp fixed_node_fun(module, body, aliases) do
+    fixed_vars = fixed_variables(body)
+
+    fn
+      {var, _, context} when is_atom(var) and is_atom(context) ->
+        MapSet.member?(fixed_vars, var)
+
+      {name, _, []} when is_atom(name) ->
+        AshCall.constant_list?(Module.concat(module), name)
+
+      {{:., _, [mod, fun]}, _, []} ->
+        case AshCall.expand(mod, module, aliases) do
+          [] -> false
+          segments -> AshCall.constant_list?(Module.concat(segments), fun)
+        end
+
+      _node ->
+        false
+    end
+  end
+
+  defp fixed_variables(body) do
+    {_ast, vars} =
+      Macro.prewalk(body, MapSet.new(), fn
+        {:=, _, [{var, _, context}, value]} = node, acc when is_atom(var) and is_atom(context) ->
+          if fixed_value?(value), do: {node, MapSet.put(acc, var)}, else: {node, acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    vars
+  end
+
+  defp fixed_value?(value) when is_list(value), do: true
+  defp fixed_value?({:@, _, [{name, _, nil}]}) when is_atom(name), do: true
+  defp fixed_value?(_value), do: false
 
   # A lambda handed to a local function that calls it once per element, like
   # `reduce_ok(list, fn x -> ... end)` wrapping `Enum.reduce_while/3`, is a
@@ -147,33 +206,13 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
   defp lambda?({:&, _, [_]}), do: true
   defp lambda?(_node), do: false
 
-  # One bulk call per chunk or group is how a large write is meant to be split.
-  defp batch?(%AshCall.Call{label: label}) do
-    String.starts_with?(label, "Ash.bulk_") or
-      Enum.any?(
-        ["Repo.insert_all", "Repo.update_all", "Repo.delete_all"],
-        &String.ends_with?(label, &1)
-      )
-  end
-
-  defp through_locals(region, defs, costly) do
+  defp through_locals(region, defs, index) do
     region
     |> AshCall.local_calls(defs)
-    |> Enum.flat_map(fn {key, meta} ->
-      case costly[key] do
-        nil ->
-          []
-
-        call ->
-          [
-            %{
-              call
-              | via: {key, call.line},
-                line: meta[:line],
-                column: meta[:column],
-                label: call.label
-            }
-          ]
+    |> Enum.flat_map(fn {key, meta, args} ->
+      case AshCall.local_call_cost(index, key, args) do
+        nil -> []
+        call -> [%{call | via: {key, call.line}, line: meta[:line], column: meta[:column]}]
       end
     end)
   end
@@ -201,12 +240,27 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
   end
 
   defp advice(:read),
-    do: "Read the whole set in one query and look each element up in a map."
-
-  defp advice(:write),
     do:
-      "Write them in one call: `Ash.bulk_create/4`, `Ash.bulk_update/4` or `Ash.bulk_destroy/4`."
+      "Read them in one query that filters on the whole list (`id in ^ids`), " <>
+        "then look each element up with `Map.new/2`; `Ash.load/3` takes a list too."
 
-  defp advice(:calculation), do: "Load the calculation on the whole list with `Ash.load/3`."
-  defp advice(:action), do: "Give the action a list argument and run it once."
+  defp advice(:create), do: "Create them in one call with `Ash.bulk_create/4`."
+
+  defp advice(:update),
+    do:
+      "Update them in one call: `Ash.bulk_update/4` when every record gets the same input, " <>
+        "`Ash.update_many/4` when each gets its own."
+
+  defp advice(:destroy), do: "Destroy them in one call with `Ash.bulk_destroy/4`."
+  defp advice(:job), do: "Insert the jobs in one call with `Oban.insert_all/2`."
+
+  defp advice(:unique_job),
+    do:
+      "The worker sets `unique`, which `Oban.insert_all/2` does not check on Oban's Basic " <>
+        "engine, so drop duplicate args before inserting them in one call, or keep one insert per job."
+
+  defp advice(:sql),
+    do:
+      "Send every element in one statement, passing the values as an array " <>
+        "(`= ANY($1)` or `unnest($1)`)."
 end

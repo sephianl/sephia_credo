@@ -22,12 +22,19 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
 
       For a change, `batch_change/3` replaces `change/3` in bulk actions, and
       `before_batch/3` and `after_batch/3` replace its `before_action` and
-      `after_action` hooks.
+      `after_action` hooks. A hook that writes to another resource can instead
+      emit an `:after_action` signal (`Ash.Signals`): in a bulk action Ash
+      emits it once per batch, and a create, update or destroy listener
+      handles the signals emitted together as one bulk action.
+
+      An `Ash.Notifier`'s `notify/1` runs once per notification, so once per
+      record of a bulk action. What it reads belongs in `load/2`, which Ash
+      loads for the whole batch before calling `notify/1`.
 
       `atomic/3` only helps an update that runs atomically as a whole; creates
       and non-atomic updates still go through `validate/3` and `change/3`.
-      Code interfaces are recognised from the compiled resource, so run Credo
-      after `mix compile`.
+      A call counts when it certainly reaches the database, as in
+      `SephiaCredo.Checks.AshActionInLoop`. Run Credo after `mix compile`.
       """
     ]
 
@@ -57,8 +64,61 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
         not Map.has_key?(defs, batch),
         call = AshCall.costly_functions(body, module, aliases)[callback],
         call != nil do
-      issue(callback, batch, call, def_line(body, callback), issue_meta)
+      shape = %{
+        hooks?: adds_hook?(defs[callback], module, aliases),
+        atomic?: Map.has_key?(defs, {:atomic, 3})
+      }
+
+      issue(callback, batch, call, shape, def_line(body, callback), issue_meta)
+    end ++ notifier_issues(module, body, aliases, defs, issue_meta)
+  end
+
+  defp notifier_issues(module, body, aliases, defs, issue_meta) do
+    with true <- notifier?(body),
+         true <- Map.has_key?(defs, {:notify, 1}),
+         %AshCall.Call{} = call <- AshCall.costly_functions(body, module, aliases)[{:notify, 1}] do
+      [notifier_issue(call, def_line(body, {:notify, 1}), issue_meta)]
+    else
+      _ -> []
     end
+  end
+
+  defp notifier?(body),
+    do: AshCall.uses?(body, [:Ash, :Notifier]) or AshCall.behaviour?(body, [:Ash, :Notifier])
+
+  defp notifier_issue(call, line, issue_meta) do
+    format_issue(issue_meta,
+      message:
+        "`notify/1` reaches #{AshCall.describe(call)}. Ash calls `notify/1` once per notification, " <>
+          "so in a bulk action that call runs once per record. " <> notifier_advice(call.kind),
+      trigger: "notify",
+      line_no: line
+    )
+  end
+
+  defp notifier_advice(:read),
+    do:
+      "Return what it reads from `load/2` instead: in a bulk action Ash loads it for the " <>
+        "whole batch before calling `notify/1`."
+
+  defp notifier_advice(_write),
+    do:
+      "A notifier has no batch callback; an `:after_action` signal (`Ash.Signals`) reaches its " <>
+        "listener once per batch, and a create, update or destroy listener handles it as one bulk action."
+
+  @hooks [:before_action, :after_action, :after_transaction]
+
+  defp adds_hook?(clauses, module, aliases) do
+    {_ast, found?} =
+      Macro.prewalk(clauses, false, fn
+        {{:., _, [mod, hook]}, _, _} = node, false when hook in @hooks ->
+          {node, AshCall.expand(mod, module, aliases) == [:Ash, :Changeset]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found?
   end
 
   defp def_line(body, {name, arity}) do
@@ -76,13 +136,33 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
     line
   end
 
-  defp issue({name, arity}, {batch, batch_arity}, call, line, issue_meta) do
+  defp issue({name, arity} = callback, batch, call, shape, line, issue_meta) do
     format_issue(issue_meta,
       message:
-        "`#{name}/#{arity}` runs #{AshCall.describe(call)} once per record in a bulk action. " <>
-          "Define `#{batch}/#{batch_arity}` to read for the whole batch at once.",
+        "`#{name}/#{arity}` reaches #{AshCall.describe(call)}. Without `#{signature(batch)}` " <>
+          "Ash calls `#{name}/#{arity}` once per record in a bulk action#{strategy(shape)}, so that " <>
+          "call runs once per record. " <> advice(callback, shape.hooks?),
       trigger: Atom.to_string(name),
       line_no: line
     )
   end
+
+  defp strategy(%{atomic?: true}),
+    do: " that does not run atomically (an atomic one uses this module's `atomic/3`)"
+
+  defp strategy(%{atomic?: false}), do: ""
+
+  defp signature({name, arity}), do: "#{name}/#{arity}"
+
+  defp advice({:validate, 3}, _hooks?),
+    do: "Define `batch_validate/3` and read for every changeset in one query."
+
+  defp advice({:change, 3}, false),
+    do: "Define `batch_change/3` and read for every changeset in one query."
+
+  defp advice({:change, 3}, true),
+    do:
+      "Define `batch_change/3` and move the hook's work to `after_batch/3`, which gets every " <>
+        "record of the batch, or emit an `:after_action` signal (`Ash.Signals`): Ash emits it " <>
+        "once per batch and a create, update or destroy listener handles the batch as one bulk action."
 end

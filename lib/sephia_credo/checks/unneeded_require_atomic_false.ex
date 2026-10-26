@@ -49,43 +49,29 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   end
 
   defp resource_issues({segments, body, _aliases}, issue_meta) do
-    case resource_of(segments, body) do
+    case SephiaCredo.AshCall.resource_of(segments, body) do
       nil -> []
       resource -> action_issues(resource, body, issue_meta)
     end
   end
-
-  # A fragment's actions only exist on the resource that includes it, which by
-  # convention is the nearest enclosing namespace that is a resource:
-  # `User.Actions` belongs to `User`.
-  defp resource_of(segments, body) do
-    cond do
-      SephiaCredo.AshCall.uses?(body, [:Ash, :Resource]) ->
-        segments |> Module.concat() |> compiled_resource()
-
-      SephiaCredo.AshCall.uses?(body, [:Spark, :Dsl, :Fragment]) ->
-        segments
-        |> Enum.drop(-1)
-        |> ancestors()
-        |> Enum.find_value(&compiled_resource(Module.concat(&1)))
-
-      true ->
-        nil
-    end
-  end
-
-  defp ancestors([]), do: []
-  defp ancestors(segments), do: [segments | ancestors(Enum.drop(segments, -1))]
-
-  defp compiled_resource(module), do: if(compiled_resource?(module), do: module)
 
   defp action_issues(resource, body, issue_meta) do
     for {type, name, line} <- non_atomic_actions(body),
         action = Info.action(resource, name, type),
         action != nil,
         builds_atomically?(resource, action) do
-      issue(type, name, line, issue_meta)
+      issue(type, name, line, skipped_hooks(resource, action), issue_meta)
     end
+  end
+
+  defp skipped_hooks(resource, action) do
+    (action.changes ++ Info.changes(resource, action.type))
+    |> Enum.flat_map(fn
+      %{__struct__: Ash.Resource.Change, change: {module, _opts}} -> [module]
+      _validation -> []
+    end)
+    |> Enum.uniq()
+    |> Enum.filter(&SephiaCredo.AshCall.hook_skipped_when_atomic?/1)
   end
 
   # Ash's own answer: it runs each change's and validation's `atomic/3`, which
@@ -101,11 +87,6 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     )
   rescue
     _error -> false
-  end
-
-  defp compiled_resource?(resource) do
-    Code.ensure_loaded?(Spark.Dsl) and Code.ensure_loaded?(resource) and
-      Spark.Dsl.is?(resource, Ash.Resource)
   end
 
   defp non_atomic_actions(body) do
@@ -135,13 +116,23 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     line
   end
 
-  defp issue(type, name, line, issue_meta) do
+  defp issue(type, name, line, skipped, issue_meta) do
     format_issue(issue_meta,
       message:
-        "`#{type} :#{name}` sets `require_atomic? false`, but its changes and validations can all run " <>
-          "atomically. Without it a bulk #{type} is one statement instead of a query per record.",
+        "`#{type} :#{name}` sets `require_atomic? false`, but Ash builds it atomically. Without it " <>
+          "a bulk #{type} is one statement instead of one per record." <> skipped_note(skipped),
       trigger: "require_atomic?",
       line_no: line
     )
+  end
+
+  defp skipped_note([]), do: ""
+
+  defp skipped_note(modules) do
+    names = Enum.map_join(modules, ", ", &"`#{inspect(&1)}`")
+    verb = if length(modules) == 1, do: "adds", else: "add"
+
+    " Before removing it: #{names} #{verb} a hook in `change/3` that `atomic/3` does not, so on " <>
+      "the atomic path that hook stops running; add it in `atomic/3` too."
   end
 end

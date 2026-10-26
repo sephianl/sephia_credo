@@ -71,17 +71,46 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> assert_issue(fn issue -> assert issue.trigger == "Domain.archive_label" end)
     end
 
-    test "flags a calculation interface" do
+    test "recommends update_many for an update with its own input per element" do
       """
       defmodule Sample do
         alias SephiaCredo.Fixtures.Label
 
-        def run(labels), do: Enum.map(labels, &Label.upcased(&1))
+        def run(labels), do: Enum.each(labels, &Label.set_zone(&1, &1.zone_id))
       end
       """
       |> to_source_file()
       |> run_check(AshActionInLoop)
-      |> assert_issue(fn issue -> assert issue.message =~ "Ash.load/3" end)
+      |> assert_issue(fn issue -> assert issue.message =~ "`Ash.update_many/4`" end)
+    end
+
+    test "ignores calculation and generic action interfaces, which may never query" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def run(labels) do
+          Enum.map(labels, &Label.upcased(&1))
+          Enum.map(labels, fn _label -> Label.ping() end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores an interface on a resource kept in memory" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Note
+
+        def run(notes), do: Enum.map(notes, &Note.touch/1)
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
     end
 
     test "resolves a grouped alias" do
@@ -215,6 +244,110 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> refute_issues()
     end
 
+    test "ignores loops over fixed collections" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Webhook
+
+        @max_passes 5
+        @zones %{a: 1, b: 2}
+
+        def run(ids) do
+          Enum.each(1..@max_passes, fn _ -> Ash.read(Thing) end)
+          Enum.each(Map.values(@zones), &Ash.get(Zone, &1))
+          Enum.each(Webhook.entity_sets(), &Ash.read(Subscription, filter: [set: &1]))
+          steps = [:pick, :load, :ship]
+          Enum.each(steps, &Ash.update(Step, %{name: &1}))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a loop over what a function returns from data" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Webhook
+
+        def run(company), do: Enum.each(Webhook.subscribed(company), &Ash.read(Subscription, filter: [set: &1]))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+
+    test "ignores an element that carries its own query" do
+      """
+      defmodule Sample do
+        def count_all(specs, opts) do
+          Task.async_stream(specs, fn {key, query_fun} -> {key, Ash.count(query_fun.(), opts)} end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores a lazy load, which only queries for what is missing" do
+      """
+      defmodule Sample do
+        def run(routes), do: Enum.map(routes, &step(&1))
+
+        defp step(route), do: Ash.load(route, :stops, lazy?: true)
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores a code interface run as a bulk action per group" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def run(levels, opts) do
+          Enum.each(levels, fn level ->
+            Label.set_zone(level, nil, [bulk_options: [batch_size: 100]] ++ opts)
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "warns that insert_all skips a unique worker's check" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.UniqueJob
+
+        def run(ids), do: Enum.each(ids, &UniqueJob.enqueue(%{id: &1}))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue ->
+        assert issue.message =~ "does not check on Oban's Basic engine"
+      end)
+    end
+
+    test "recommends one statement for raw SQL" do
+      """
+      defmodule Sample do
+        def run(ways), do: Enum.map(ways, &Repo.query!("SELECT crossings($1)", [&1]))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.message =~ "`= ANY($1)`" end)
+    end
+
     test "ignores one bulk call per chunk" do
       """
       defmodule Sample do
@@ -332,6 +465,38 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> to_source_file()
       |> run_check(AshActionInLoop)
       |> refute_issues()
+    end
+
+    test "only follows the clauses a literal argument can match" do
+      """
+      defmodule ListRoutes do
+        def collapse_others(socket, expanded, keep_id) do
+          Enum.reduce(expanded, socket, fn
+            ^keep_id, acc -> acc
+            other_id, acc -> toggle(acc, other_id, true)
+          end)
+        end
+
+        defp toggle(socket, id, true), do: Map.delete(socket, id)
+        defp toggle(socket, id, false), do: Ash.load(socket.route, :stops) && Map.put(socket, id, true)
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "reports a helper's loop once, at the helper" do
+      """
+      defmodule Sample do
+        def run(orders), do: Enum.each(orders, &create_expected(&1.codes))
+
+        defp create_expected(codes), do: Enum.each(codes, &Ash.create(Expected, %{code: &1}))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.line_no == 4 end)
     end
 
     test "ignores a private function that does not reach a query" do

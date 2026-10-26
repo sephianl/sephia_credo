@@ -25,8 +25,8 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> assert_issue(fn issue ->
         assert issue.line_no == 7
         assert issue.trigger == "validate"
-        assert issue.message =~ "`validate/3` runs `Label.get_by_code` once per record"
-        assert issue.message =~ "batch_validate/3"
+        assert issue.message =~ "`validate/3` reaches `Label.get_by_code`"
+        assert issue.message =~ "Define `batch_validate/3`"
       end)
     end
 
@@ -48,6 +48,20 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> assert_issue(fn issue ->
         assert issue.message =~ "`check/1`, which reaches `Ash.exists?` (line 8)"
       end)
+    end
+
+    test "says an atomic bulk action goes through atomic/3 instead" do
+      """
+      defmodule OrderNotOnActiveRoute do
+        use Ash.Resource.Validation
+
+        def validate(changeset, _opts, _context), do: if(Ash.exists?(Route), do: {:error, "on route"}, else: :ok)
+        def atomic(_changeset, _opts, _context), do: :ok
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue(fn issue -> assert issue.message =~ "that does not run atomically" end)
     end
 
     test "ignores a validation that defines batch_validate/3" do
@@ -80,6 +94,58 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
     end
   end
 
+  describe "notifiers" do
+    test "flags a read in notify/1 and points at load/2" do
+      """
+      defmodule SyncDelegatedOrder do
+        use Ash.Notifier
+
+        alias SephiaCredo.Fixtures.Label
+
+        def notify(%{data: %{code: code}}) do
+          case Label.get_by_code(code) do
+            {:ok, _label} -> :ok
+            {:error, _} -> :ok
+          end
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue(fn issue ->
+        assert issue.trigger == "notify"
+        assert issue.message =~ "once per notification"
+        assert issue.message =~ "`load/2`"
+      end)
+    end
+
+    test "points a write in notify/1 at a signal" do
+      """
+      defmodule Audit do
+        @behaviour Ash.Notifier
+
+        def notify(notification), do: Ash.create(AuditEntry, %{id: notification.data.id})
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue(fn issue -> assert issue.message =~ "Ash.Signals" end)
+    end
+
+    test "ignores a notifier that does not query" do
+      """
+      defmodule Broadcast do
+        use Ash.Notifier
+
+        def notify(notification), do: Phoenix.PubSub.broadcast(MyPubSub, "t", notification)
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+  end
+
   describe "changes" do
     test "flags a query in an after_action hook" do
       """
@@ -98,8 +164,9 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> to_source_file()
       |> run_check(QueryWithoutBatchCallback)
       |> assert_issue(fn issue ->
-        assert issue.message =~ "`change/3` runs `Ash.create` once per record"
-        assert issue.message =~ "batch_change/3"
+        assert issue.message =~ "`change/3` reaches `Ash.create`"
+        assert issue.message =~ "after_batch/3"
+        assert issue.message =~ "Ash.Signals"
       end)
     end
 

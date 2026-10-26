@@ -1,6 +1,37 @@
+defmodule SephiaCredo.Fixtures.StoredDataLayer do
+  @moduledoc "Stands in for a database data layer, which is all the checks ask of a resource."
+  use Spark.Dsl.Extension, sections: []
+  @behaviour Ash.DataLayer
+
+  @impl true
+  def can?(_resource, _feature), do: true
+
+  @impl true
+  def resource_to_query(resource, _domain), do: resource
+end
+
+defmodule SephiaCredo.Fixtures.Note do
+  @moduledoc "A resource kept in memory, whose code interfaces never reach a database."
+  use Ash.Resource, domain: SephiaCredo.Fixtures.Domain
+
+  attributes do
+    uuid_primary_key(:id)
+  end
+
+  actions do
+    defaults([:read, update: []])
+  end
+
+  code_interface do
+    define(:touch, action: :update)
+  end
+end
+
 defmodule SephiaCredo.Fixtures.Label do
   @moduledoc "A resource with read, update, generic-action and calculation interfaces."
-  use Ash.Resource, domain: SephiaCredo.Fixtures.Domain
+  use Ash.Resource,
+    domain: SephiaCredo.Fixtures.Domain,
+    data_layer: SephiaCredo.Fixtures.StoredDataLayer
 
   attributes do
     uuid_primary_key(:id)
@@ -8,8 +39,28 @@ defmodule SephiaCredo.Fixtures.Label do
     attribute(:zone_id, :uuid, public?: true)
   end
 
+  relationships do
+    belongs_to(:parent, __MODULE__, public?: true)
+    belongs_to(:origin, __MODULE__, public?: true)
+    belongs_to(:twin, __MODULE__, public?: true)
+    belongs_to(:crate, SephiaCredo.Fixtures.Crate, public?: true)
+    belongs_to(:bin, SephiaCredo.Fixtures.Bin, public?: true)
+  end
+
+  aggregates do
+    count(:child_count, :parent)
+  end
+
   actions do
     defaults([:read, :destroy])
+
+    read :with_family do
+      prepare(
+        build(
+          load: [:crate, :child_count, :origin, :twin, parent: [:origin, :twin, parent: [:bin]]]
+        )
+      )
+    end
 
     read :by_code do
       argument(:code, :integer, allow_nil?: false)
@@ -41,6 +92,18 @@ defmodule SephiaCredo.Fixtures.Label do
   end
 end
 
+defmodule SephiaCredo.Fixtures.LogMutation do
+  @moduledoc "Logs from an after_action hook that its atomic/3 leaves out, like Green's MutationLogger."
+  use Ash.Resource.Change
+
+  @impl true
+  def change(changeset, _opts, _context),
+    do: Ash.Changeset.after_action(changeset, fn _changeset, record -> {:ok, record} end)
+
+  @impl true
+  def atomic(_changeset, _opts, _context), do: :ok
+end
+
 defmodule SephiaCredo.Fixtures.Bin do
   @moduledoc "A resource with `require_atomic? false` actions, needed and not."
   use Ash.Resource, domain: SephiaCredo.Fixtures.Domain
@@ -67,6 +130,11 @@ defmodule SephiaCredo.Fixtures.Bin do
 
     destroy :purge do
       require_atomic?(false)
+    end
+
+    update :logged do
+      require_atomic?(false)
+      change(SephiaCredo.Fixtures.LogMutation)
     end
   end
 end
@@ -99,10 +167,29 @@ end
 
 defmodule SephiaCredo.Fixtures.EmailJob do
   @moduledoc "Stands in for an `Oban.Worker` that wraps its own insert."
-  def __opts__, do: [queue: :default]
+  @compile {:no_warn_undefined, [Oban]}
+
   def new(args), do: args
   def perform(_job), do: :ok
-  def enqueue(parcel), do: {:ok, parcel}
+  def enqueue(parcel), do: parcel |> args() |> new() |> Oban.insert()
+  def args(parcel), do: %{id: parcel.id}
+end
+
+defmodule SephiaCredo.Fixtures.UniqueJob do
+  @moduledoc "Stands in for an `Oban.Worker` with `unique` set."
+  @compile {:no_warn_undefined, [Oban]}
+
+  def __opts__, do: [queue: :default, unique: [period: 60]]
+  def perform(_job), do: :ok
+  def enqueue(args), do: Oban.insert(args)
+end
+
+defmodule SephiaCredo.Fixtures.Webhook do
+  @moduledoc "Returns its entity sets from a module attribute, as a constant."
+  @entity_sets ["items", "orders", "customers"]
+
+  def entity_sets, do: @entity_sets
+  def subscribed(company), do: company.entity_sets
 end
 
 defmodule SephiaCredo.Fixtures.Domain do
@@ -114,6 +201,7 @@ defmodule SephiaCredo.Fixtures.Domain do
       define(:archive_label, action: :archive)
     end
 
+    resource(SephiaCredo.Fixtures.Note)
     resource(SephiaCredo.Fixtures.Bin)
     resource(SephiaCredo.Fixtures.Crate)
   end
