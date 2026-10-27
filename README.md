@@ -27,7 +27,7 @@ Add `sephia_credo` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sephia_credo, "~> 0.9", only: [:dev, :test], runtime: false}
+    {:sephia_credo, "~> 0.10", only: [:dev, :test], runtime: false}
   ]
 end
 ```
@@ -406,6 +406,47 @@ MyApp.Planner.Route.Worker         lib/my_app/planner/resources/route/worker.ex
 A domain module may sit in its own folder, as `MyApp.Geography` does, and `resources` is a folder that is never part of a name, so it is ignored on both sides. `ModuleLayout` skips Ash resource code, whose placement is a convention of its own. The fix for `ModuleLayout` and `TestLayout` is a `git mv` that keeps the module name; for `UniqueModuleName` it is a rename.
 
 `UniqueModuleName` and `TestLayout` read modules from other files, once per run. They resolve `included_paths` and `lib_paths` against the folder holding the checked file's `lib/` or `test/`, so in `credo diff` the merge-base pass reads the merge-base tree.
+
+## Query cost checks *(opt-in)*
+
+Five checks for database work that multiplies with the rows. They report facts the code shows, not style: each names the call, the line it is reached from, and why it runs that often, and suggests the batched form. The four Ash ones read the compiled project, so run Credo after `mix compile`; without a compiled project they see less, never more.
+
+| Check | Category | Description |
+|---|---|---|
+| `AshActionInLoop` | Warning | A database call that runs once per element of a loop, directly or through the module's own functions |
+| `QueryWithoutBatchCallback` | Warning | A validation, change or notifier that queries per record in a bulk action because it lacks the batch callback |
+| `UnneededRequireAtomicFalse` | Warning | `require_atomic? false` on an update or destroy that Ash builds atomically |
+| `DeepLoad` | Refactor | A load naming more than `max_relationships` relationships, each its own query |
+| `RollbackOnSuccess` | Warning | A transaction that rolls back on its `{:ok, _}` path: a preview that does all the work |
+
+```elixir
+{SephiaCredo.Checks.AshActionInLoop, []},
+{SephiaCredo.Checks.QueryWithoutBatchCallback, []},
+{SephiaCredo.Checks.UnneededRequireAtomicFalse, []},
+{SephiaCredo.Checks.DeepLoad, max_relationships: 4},
+{SephiaCredo.Checks.RollbackOnSuccess, []}
+```
+
+A call counts as a database call only when it certainly is one: the `Ash` read and write API, an Ecto repo, `Oban.insert/2` or a function the compiled module shows calling it, and a code interface of a create, read, update or destroy action on a resource with a database data layer. Generic actions, calculation interfaces, `lazy?: true` loads and resources kept in memory may never query, so they are not counted.
+
+**`AshActionInLoop`** follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`). The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2` (with a warning for workers that set `unique`, which the Basic engine does not check in `insert_all`), or one SQL statement over an array.
+
+**`QueryWithoutBatchCallback`** reports a `validate/3` or `change/3` (including the hooks it adds) that reaches a database call while the module lacks `batch_validate/3` or `batch_change/3`: Ash then calls it once per record in a bulk action. A hook's work moves to `after_batch/3`. When it tells another resource what happened, an `:after_action` signal (`Ash.Signals`) fits: declare it on the action with `emit`, or emit it with `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that is not an attribute. A bulk action emits `:after_action` signals once per batch, and a create, update or destroy listener, or a generic one with `batch?: true`, handles the batch in one call. A notifier's `notify/1` runs once per notification; what it reads belongs in `load/2`, which Ash loads for the whole batch.
+
+**`UnneededRequireAtomicFalse`** asks Ash: it builds the action with `Ash.Changeset.fully_atomic_changeset/4`, which runs every change's and validation's `atomic/3` without touching the database. Those callbacks, and the action's default functions, are your code, so each action is built in a process of its own: one that raises, exits or takes more than five seconds leaves the action unreported. When a change adds a hook in `change/3` that its `atomic/3` leaves out, the message names it, since removing the option stops that hook from running.
+
+**`DeepLoad`** counts relationships from the compiled resource, only where it knows the resource: a read action's `prepare build(load: ...)`, a code interface's `load:`, and `Ash.read/2`, `Ash.get/3` or `Ash.Query.load/2` on a named resource. Module attributes are followed anywhere in the tree. Manual relationships and ones into resources kept in memory are not counted.
+
+### Edge cases
+
+Run against two production Ash codebases (about 630 reports), three reports were wrong, and all three for the same reason: a collection that holds at most one element because of something outside the code, a partial unique index or `top: 1` on an external API. Some ten to fifteen more were right but deliberate: a loop where each step reads what the previous one wrote, locks taken one by one in a fixed order, a per-row fallback after a bulk insert failed. Neither is visible in the code, so the checks cannot tell. Make the single row explicit in the code, or mark a deliberate case with its reason:
+
+```elixir
+# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
+# Each route departs when the previous one ends.
+```
+
+`QueryWithoutBatchCallback` reports a module whatever actions use it: a change only single-record actions use costs nothing extra until one of them runs in bulk. `mix credo explain` lists each check's limits.
 
 ## Usage rules for AI agents
 

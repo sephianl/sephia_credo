@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-10-27
+
+### Added
+
+Five opt-in checks for database work that multiplies with the rows, described under "Query cost checks" in the README. The four Ash ones read the compiled project, as `ash_credo` does, so run Credo after `mix compile`. Run against two production Ash codebases, every report was checked by hand and against the queries their test suites actually issued.
+
+- `AshActionInLoop` *(Warning)* — a database call that runs once per element of a loop, directly or through the module's own functions; advice names the batched form for reads, creates, updates (`Ash.bulk_update/4` or `Ash.update_many/4`), destroys, Oban jobs and raw SQL.
+- `QueryWithoutBatchCallback` *(Warning)* — a validation, change or notifier that queries per record in a bulk action because it lacks `batch_validate/3`, `batch_change/3` or a `load/2`; points hooks at `after_batch/3` or an `Ash.Signals` signal.
+- `UnneededRequireAtomicFalse` *(Warning)* — `require_atomic? false` on an update or destroy that Ash builds atomically, naming any change whose hook the atomic path would skip.
+- `DeepLoad` *(Refactor)* — a load naming more than `max_relationships` (4) relationships, counted from the compiled resource.
+- `RollbackOnSuccess` *(Warning)* — a transaction that rolls back on its `{:ok, _}` path.
 
 ### Changed
 
