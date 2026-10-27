@@ -36,12 +36,15 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
       change's and validation's `atomic/3` (the action's own, global ones and
       ones added by extensions) without touching the database. That runs the
       project's own `atomic/3` callbacks and default functions, each action in
-      a process of its own: one that declines without its input, raises, exits
-      or takes more than five seconds leaves the action unreported. So does a
-      resource with no `domain:` of its own, which Ash cannot build without
-      one. Actions in a `Spark.Dsl.Fragment` are read from the nearest
-      enclosing resource (`User.Actions` from `User`). Run Credo after
-      `mix compile`.
+      a process of its own: one that declines without its input, raises, exits,
+      waits five seconds on something other than loading code, or runs away
+      leaves the action unreported. So does a resource with no `domain:` of
+      its own, which Ash cannot build without one. Time spent waiting for the
+      code server to load modules does not count towards the five seconds, so
+      a busy machine, or the colder base pass of `credo diff`, gives the same
+      answer as an idle one. Actions in a `Spark.Dsl.Fragment` are read from
+      the nearest enclosing resource (`User.Actions` from `User`). Run Credo
+      after `mix compile`.
 
       Building atomically is not the same as behaving the same: a change whose
       `atomic/3` leaves out a hook its `change/3` adds stops running that hook
@@ -63,7 +66,10 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   @compile {:no_warn_undefined,
             [Ash.Resource.Info, Ash.Changeset, Spark, Spark.Dsl, AshArchival.Resource.Info]}
 
-  @build_timeout 5_000
+  @poll_interval 50
+  @max_blocked 5_000
+  @max_reductions 500_000_000
+  @code_loading [:code_server, :code, :erl_prim_loader, :error_handler]
 
   @impl true
   def run(source_file, params \\ []) do
@@ -144,16 +150,54 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   # stopping the Credo run.
   defp builds_atomically?(resource, action) do
     {pid, ref} = spawn_monitor(fn -> exit({:built, atomic_changeset?(resource, action)}) end)
+    await_build(pid, ref, 0)
+  end
 
+  # A wall-clock deadline would make the answer depend on the machine's load:
+  # early in a full run every build queues behind the code server loading
+  # modules, for over ten seconds on a sixteen-core machine. `credo diff`
+  # analyses the base first, in the colder VM, so an action dropped there comes
+  # back as a new issue on a branch that never touched it. Only time blocked on
+  # something other than loading code counts towards the limit, and a build that
+  # keeps computing is stopped by the work it does, not the time it takes.
+  defp await_build(pid, ref, blocked) do
     receive do
       {:DOWN, ^ref, :process, ^pid, {:built, built?}} -> built?
       {:DOWN, ^ref, :process, ^pid, _reason} -> false
     after
-      @build_timeout ->
-        Process.exit(pid, :kill)
-        Process.demonitor(ref, [:flush])
-        false
+      @poll_interval ->
+        case progress(pid) do
+          :loading_code -> await_build(pid, ref, blocked)
+          :running -> await_build(pid, ref, blocked)
+          :blocked when blocked < @max_blocked -> await_build(pid, ref, blocked + @poll_interval)
+          _stuck_or_runaway -> stop_build(pid, ref)
+        end
     end
+  end
+
+  defp progress(pid) do
+    case Process.info(pid, [:status, :current_function, :reductions]) do
+      nil ->
+        :running
+
+      [status: _, current_function: _, reductions: r] when r > @max_reductions ->
+        :runaway
+
+      [status: _, current_function: {module, _, _}, reductions: _] when module in @code_loading ->
+        :loading_code
+
+      [status: :waiting, current_function: _, reductions: _] ->
+        :blocked
+
+      _running_or_runnable ->
+        :running
+    end
+  end
+
+  defp stop_build(pid, ref) do
+    Process.exit(pid, :kill)
+    Process.demonitor(ref, [:flush])
+    false
   end
 
   defp atomic_changeset?(resource, action) do
