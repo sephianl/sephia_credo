@@ -400,20 +400,27 @@ convention the project opted into; if the check is wrong about it, say so.
 
 `AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `DeepLoad` and
 `RollbackOnSuccess` report database work that multiplies with the rows. The four Ash ones also read
-the compiled project, so run `mix compile` before Credo, and a report on stale code is stale.
+the compiled project, so run `mix compile` before Credo, and a report on stale code is stale. They
+are experimental and may change between patch releases.
 
 Their reports are rarely wrong about what the code does (three of about 630 in two production
 codebases), so the risk is the opposite one: a "fix" that batches work which has to stay one row at
 a time. Before rewriting,
 confirm that the collection really holds many rows and that no step depends on the one before it.
-Each step reading what the previous one wrote, locks taken one by one in a fixed order, and a
-per-row fallback after a bulk call failed are deliberate. Mark those with the reason rather than
-batching them:
+A reduce whose call takes the accumulator and returns the next one is already left alone. Locks
+taken one by one in a fixed order, a per-row fallback after a bulk call failed, and a collection
+bounded by a domain invariant are deliberate. Do not mark those with a `# credo:disable` comment:
+name the function in the check's `allow` in `.credo.exs`, with the reason, and leave the code as it
+is. An entry without a reason stops the run.
 
 ```elixir
-# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
-# Each route departs when the previous one ends.
+{SephiaCredo.Checks.AshActionInLoop,
+ allow: [{MyApp.Routes.UnassignDriver, :handle_routes, "A driver overlaps at most one route"}]}
 ```
+
+`AshActionInLoop`, `PreloadInLoop` and `QueryWithoutBatchCallback` take `allow`; for
+`QueryWithoutBatchCallback` the function is the callback the report is on (`:validate`, `:change`,
+`:notify`).
 
 - **`AshActionInLoop`** — a database call once per element of a loop, directly or through the
   module's own functions; the message names the call and the line it is reached from. Use the
@@ -426,8 +433,13 @@ batching them:
 - **`QueryWithoutBatchCallback`** — a validation, change or notifier that queries per record in a
   bulk action. Add `batch_validate/3` or `batch_change/3` doing the query once for the batch; move
   action hook work to `after_batch/3`; give a notifier a `load/2`. Transaction hooks have no batch
-  form, so a change whose transaction hook does work is not reported. A change only single-record
-  actions use costs nothing yet, but say so when silencing it.
+  form, so a change whose transaction hook does work is not reported, and neither is an insert of a
+  job whose worker sets `unique`. A module is reported only when a bulk action can run it: a global
+  change or validation, or one on an action the compiled project runs in bulk (primary, a signal
+  listener, named in an `Ash.bulk_*`/`update_many` call, or a code interface handed anything not
+  shown to be one record). So a report means a bulk path exists: find it before deciding the module
+  is single-record only. If the caller handing a list is the mistake, fix the caller; if a context
+  flag skips the query in bulk, name the callback in `allow` with that reason.
 - **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so without
   `require_atomic? false` a bulk update is one statement instead of one per record. Removing it is
   not behaviour-neutral: on the atomic path Ash calls each change's `atomic/3` instead of
