@@ -265,7 +265,7 @@ defmodule SephiaCredo.AshCall do
   """
   def job_kind(module, fun, arity) do
     with {:ok, definitions} <- compiled_definitions(module),
-         true <- inserts_job?(definitions, {fun, arity}, MapSet.new()) do
+         true <- reaches?(definitions, {fun, arity}, &job_insert?/1) do
       if unique_worker?(module), do: :unique_job, else: :job
     else
       _ -> nil
@@ -284,35 +284,22 @@ defmodule SephiaCredo.AshCall do
 
   @doc """
   Whether a change module's `change/3` adds a `before_action`, `after_action`
-  or `after_transaction` hook that its `atomic/3` does not, read from the
-  compiled module. On the atomic path such a hook does not run, unless the
-  module also covers bulk actions with `after_batch/3` or `before_batch/3`.
+  or `after_transaction` hook that its `atomic/3` does not, directly or through
+  the module's own functions, read from the compiled module. On the atomic
+  path such a hook does not run, unless the module also covers bulk actions
+  with `after_batch/3` or `before_batch/3`.
   """
   def hook_skipped_when_atomic?(module) do
-    with {:ok, definitions} <- compiled_definitions(module),
-         {:ok, change} <- Map.fetch(definitions, {:change, 3}),
-         {:ok, atomic} <- Map.fetch(definitions, {:atomic, 3}) do
-      not Map.has_key?(definitions, {:after_batch, 3}) and
-        not Map.has_key?(definitions, {:before_batch, 3}) and
-        adds_hook?(change) and not adds_hook?(atomic)
-    else
-      _ -> false
+    case compiled_definitions(module) do
+      {:ok, %{{:atomic, 3} => _} = definitions} ->
+        not Map.has_key?(definitions, {:after_batch, 3}) and
+          not Map.has_key?(definitions, {:before_batch, 3}) and
+          reaches?(definitions, {:change, 3}, &hook_call?/1) and
+          not reaches?(definitions, {:atomic, 3}, &hook_call?/1)
+
+      _ ->
+        false
     end
-  end
-
-  @hook_functions [:before_action, :after_action, :after_transaction]
-
-  defp adds_hook?(bodies) do
-    {_ast, found?} =
-      Macro.prewalk(bodies, false, fn
-        {{:., _, [Ash.Changeset, hook]}, _, _} = node, _acc when hook in @hook_functions ->
-          {node, true}
-
-        node, acc ->
-          {node, acc}
-      end)
-
-    found?
   end
 
   @doc """
@@ -381,47 +368,54 @@ defmodule SephiaCredo.AshCall do
 
   defp bodies(clauses), do: Enum.map(clauses, fn {_meta, _args, _guards, body} -> body end)
 
-  defp inserts_job?(definitions, fun, seen) do
+  defp job_insert?({{:., _, [Oban, insert]}, _, _}) when insert in @oban_inserts, do: true
+  defp job_insert?(_node), do: false
+
+  @hook_functions [:before_action, :after_action, :after_transaction]
+
+  defp hook_call?({{:., _, [Ash.Changeset, hook]}, _, _}) when hook in @hook_functions, do: true
+  defp hook_call?(_node), do: false
+
+  # Whether `fun` makes a call `target?` accepts, directly or through the
+  # module's own functions: `atomic/3` delegating to `change/3`, or an
+  # `enqueue/1` wrapping its insert.
+  defp reaches?(definitions, fun, target?, seen \\ MapSet.new()) do
     case Map.fetch(definitions, fun) do
       {:ok, clauses} ->
         seen = MapSet.put(seen, fun)
-        {direct?, locals} = scan_clauses(clauses, definitions)
-        direct? or Enum.any?(locals, &(&1 not in seen and inserts_job?(definitions, &1, seen)))
+        {direct?, locals} = scan_clauses(clauses, definitions, target?)
+
+        direct? or
+          Enum.any?(locals, &(&1 not in seen and reaches?(definitions, &1, target?, seen)))
 
       :error ->
         false
     end
   end
 
-  defp scan_clauses(clauses, definitions) do
+  defp scan_clauses(clauses, definitions, target?) do
     {_ast, found} =
-      Macro.prewalk(clauses, {false, []}, fn
-        {{:., _, [Oban, insert]}, _, _} = node, {_direct?, locals} when insert in @oban_inserts ->
-          {node, {true, locals}}
-
-        {:&, _, [{:/, _, [{name, _, context}, arity]}]} = node, {direct?, locals}
-        when is_atom(name) and is_atom(context) and is_integer(arity) ->
-          {node, {direct?, add_defined({name, arity}, definitions, locals)}}
-
-        # The wrapper a default argument generates calls the full clause as `super`.
-        {:super, meta, args} = node, {direct?, locals} when is_list(args) ->
-          case meta[:super] do
-            {_kind, name} ->
-              {node, {direct?, add_defined({name, length(args)}, definitions, locals)}}
-
-            _other ->
-              {node, {direct?, locals}}
-          end
-
-        {name, _, args} = node, {direct?, locals} when is_atom(name) and is_list(args) ->
-          {node, {direct?, add_defined({name, length(args)}, definitions, locals)}}
-
-        node, acc ->
-          {node, acc}
+      Macro.prewalk(clauses, {false, []}, fn node, {direct?, locals} ->
+        {node, {direct? or target?.(node), add_defined(local_call(node), definitions, locals)}}
       end)
 
     found
   end
+
+  defp local_call({:&, _, [{:/, _, [{name, _, context}, arity]}]})
+       when is_atom(name) and is_atom(context) and is_integer(arity),
+       do: {name, arity}
+
+  # The wrapper a default argument generates calls the full clause as `super`.
+  defp local_call({:super, meta, args}) when is_list(args) do
+    case meta[:super] do
+      {_kind, name} -> {name, length(args)}
+      _other -> nil
+    end
+  end
+
+  defp local_call({name, _, args}) when is_atom(name) and is_list(args), do: {name, length(args)}
+  defp local_call(_node), do: nil
 
   defp add_defined(key, definitions, locals),
     do: if(Map.has_key?(definitions, key), do: [key | locals], else: locals)

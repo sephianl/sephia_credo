@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-10-27
+
+### Fixed
+
+- `UnneededRequireAtomicFalse` no longer reports an action that un-archives a row on an `AshArchival` resource. An atomic update finds its row through `atomic_upgrade_with` or the primary read, and AshArchival hides archived rows from every read not in `exclude_read_actions`, so removing the option made the action fail with `StaleRecord`. Run against Green, these were all 57 of the reports that removing the option broke.
+- `UnneededRequireAtomicFalse` no longer names a change as skipping its hook when `atomic/3` adds that hook through the module's own functions, as `def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}` does. `change/3` is followed the same way, so a hook it adds through a helper is seen too.
+
 ## [0.10.0] - 2026-10-27
 
 ### Added
