@@ -431,7 +431,8 @@ batching them:
   Find what each caller reads before trimming: a default load in `prepare build(load: ...)` is
   shared by every caller of the action. Where one value of a relationship is needed (a count, an
   existence check), an aggregate or expression calculation returns it in the main query. A load
-  that needs every relationship it names is fine to keep; `max_relationships` is a budget.
+  that needs every relationship it names is fine to keep; `max_relationships` is a budget. Never
+  answer this check by reading the related records per record: that is the N+1 the load avoids.
 - **`RollbackOnSuccess`** — a transaction that rolls back on its `{:ok, _}` path: a preview built
   by doing all the work. Load the state the writes would read once and compute the outcome in
   memory instead. Keep the rollback on the error path; that one is fine.
