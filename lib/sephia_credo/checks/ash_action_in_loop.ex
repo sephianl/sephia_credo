@@ -48,28 +48,50 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
       saving, and a bulk call in its place makes the setup read less like the
       code it exercises. `include_tests: true` checks test code too.
 
+      A reducing loop whose call takes the accumulator and whose result
+      becomes the next accumulator is sequential by necessity and is not
+      reported, as in `Enum.map_reduce(routes, start, fn route, start ->
+      result = recalc(route, start); {result, ended_at(result)} end)`: each
+      route departs when the previous one ends. A call that only feeds a
+      collected accumulator, like `create(item)` in
+      `fn item, {:ok, acc} -> ... end`, is still reported.
+
       What the check cannot see:
 
         * a collection that holds at most one element for a reason outside
           the code, such as a unique index or `top: 1` on an external API.
           Saying so in the code (match `[row]`, or update by query) helps the
           next reader as much as the check;
-        * a loop that is sequential on purpose: each step reads what the
-          previous one wrote, or locks are taken one by one in a fixed order.
+        * a loop that is sequential on purpose for a reason the data flow does
+          not show, such as locks taken one by one in a fixed order.
 
-      Mark those with the reason, so the next reader knows it was decided:
+      Name the function holding such a loop in `.credo.exs`, with the reason,
+      so the decision lives in one reviewed place rather than in a comment
+      beside the code:
 
-          # credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
-          # Each route departs when the previous one ends.
+          {SephiaCredo.Checks.AshActionInLoop,
+           allow: [
+             {MyApp.Routes.UnassignDriver, :handle_routes,
+              "A driver overlaps at most one route, so the loop runs once"}
+           ]}
       """,
       params: [
-        include_tests: "Check test files and test support code too."
+        include_tests: "Check test files and test support code too.",
+        allow:
+          "Functions whose loops are fine, as `{Module, :function, \"reason\"}` or " <>
+            "`{Module, :function, arity, \"reason\"}`. The reason is required."
       ]
     ],
-    param_defaults: [include_tests: false]
+    param_defaults: [include_tests: false, allow: []]
 
   alias SephiaCredo.AshCall
   alias SephiaCredo.TestFile
+
+  @impl true
+  def run_on_all_source_files(exec, source_files, params) do
+    :ok = SephiaCredo.Allow.validate!(params, __MODULE__)
+    super(exec, source_files, params)
+  end
 
   @impl true
   def run(source_file, params \\ []) do
@@ -78,7 +100,7 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     with true <-
            Params.get(params, :include_tests, __MODULE__) or not TestFile.test_code?(source_file),
          {:ok, ast} <- Credo.Code.ast(source_file) do
-      find_issues(ast, issue_meta)
+      ast |> find_issues(issue_meta) |> SephiaCredo.Allow.reject(source_file, params, __MODULE__)
     else
       _skipped_or_unparsable -> []
     end
@@ -117,7 +139,9 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     |> Enum.concat(helper_regions(body))
     |> Enum.flat_map(fn region ->
       direct = region |> AshCall.calls_in(module, aliases) |> Enum.reject(&preload?/1)
-      direct ++ through_locals(region, defs, index)
+      calls = direct ++ through_locals(region, defs, index)
+      carried = SephiaCredo.Loop.carried_calls(region, MapSet.new(calls, &{&1.line, &1.column}))
+      Enum.reject(calls, &MapSet.member?(carried, {&1.line, &1.column}))
     end)
     |> Enum.reject(&(&1.batched? or &1.element_query? or &1.kind == :unique_job))
   end

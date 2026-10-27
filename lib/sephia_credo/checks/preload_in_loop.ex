@@ -20,14 +20,30 @@ defmodule SephiaCredo.Checks.PreloadInLoop do
       that is not under `lib/`, such as `test/support`. A test's loop runs over
       a handful of fixture rows, so a load per element costs nothing worth
       saving. `include_tests: true` checks test code too.
+
+      A loop over a collection that holds at most one element for a reason
+      outside the code is fine. Name the function holding it in `.credo.exs`,
+      with the reason, rather than marking the line:
+
+          {SephiaCredo.Checks.PreloadInLoop,
+           allow: [{MyApp.Accounts, :primary_user, "A company has one owner"}]}
       """,
       params: [
-        include_tests: "Check test files and test support code too."
+        include_tests: "Check test files and test support code too.",
+        allow:
+          "Functions whose loops are fine, as `{Module, :function, \"reason\"}` or " <>
+            "`{Module, :function, arity, \"reason\"}`. The reason is required."
       ]
     ],
-    param_defaults: [include_tests: false]
+    param_defaults: [include_tests: false, allow: []]
 
   alias SephiaCredo.TestFile
+
+  @impl true
+  def run_on_all_source_files(exec, source_files, params) do
+    :ok = SephiaCredo.Allow.validate!(params, __MODULE__)
+    super(exec, source_files, params)
+  end
 
   @impl true
   def run(source_file, params \\ []) do
@@ -36,7 +52,7 @@ defmodule SephiaCredo.Checks.PreloadInLoop do
     with true <-
            Params.get(params, :include_tests, __MODULE__) or not TestFile.test_code?(source_file),
          {:ok, ast} <- Credo.Code.ast(source_file) do
-      find_issues(ast, issue_meta)
+      ast |> find_issues(issue_meta) |> SephiaCredo.Allow.reject(source_file, params, __MODULE__)
     else
       _skipped_or_unparsable -> []
     end

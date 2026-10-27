@@ -361,6 +361,19 @@ defmodule SephiaCredo.Checks.PreloadInLoopTest do
     end
   end
 
+  describe "allow" do
+    test "leaves alone the loops of a function an entry names" do
+      """
+      defmodule MyApp.Accounts do
+        def owners(companies), do: Enum.map(companies, &Ash.load(&1, :owner))
+      end
+      """
+      |> to_source_file()
+      |> run_check(PreloadInLoop, allow: [{MyApp.Accounts, :owners, "Called with one company"}])
+      |> refute_issues()
+    end
+  end
+
   describe "test code" do
     @fixture_loop """
     defmodule SampleTest do

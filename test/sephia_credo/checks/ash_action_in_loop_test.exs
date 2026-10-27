@@ -702,6 +702,130 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
     end
   end
 
+  describe "accumulators" do
+    test "ignores a call that takes the accumulator and whose result becomes the next one" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def cascade(labels, zone_id) do
+          labels
+          |> Enum.map_reduce(zone_id, fn label, previous_zone ->
+            result = move_after(label, previous_zone)
+            {result, zone_of(result)}
+          end)
+          |> elem(0)
+        end
+
+        defp move_after(label, zone_id), do: Label.set_zone(label, zone_id)
+        defp zone_of({:ok, label}), do: Ash.load!(label, :child_count).zone_id
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores a reduce whose next accumulator is the matched result" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def chain(labels, zone_id) do
+          Enum.reduce_while(labels, zone_id, fn label, zone_id ->
+            case Label.set_zone(label, zone_id) do
+              {:ok, moved} -> {:cont, moved.zone_id}
+              {:error, _} -> {:halt, zone_id}
+            end
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a call the accumulator only collects the results of" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def move_all(labels) do
+          Enum.reduce(labels, {:ok, []}, fn label, {:ok, acc} ->
+            case Label.set_zone(label, nil) do
+              {:ok, moved} -> {:ok, [moved | acc]}
+              error -> error
+            end
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.trigger == "Label.set_zone" end)
+    end
+
+    test "flags a call that takes the accumulator when its result does not feed the next one" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def count_moves(labels, zone_id) do
+          Enum.reduce(labels, 0, fn label, count ->
+            Label.set_zone(label, zone_id, context: %{count: count})
+            count + 1
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+  end
+
+  describe "allow" do
+    @bounded """
+    defmodule MyApp.UnassignDriver do
+      alias SephiaCredo.Fixtures.Label
+
+      def handle_routes(labels), do: Enum.each(labels, &Label.set_zone(&1, nil))
+
+      def other(labels), do: Enum.each(labels, &Label.set_zone(&1, nil))
+    end
+    """
+
+    test "leaves alone the loops of a function an entry names" do
+      @bounded
+      |> to_source_file()
+      |> run_check(AshActionInLoop,
+        allow: [{MyApp.UnassignDriver, :handle_routes, "A driver overlaps at most one route"}]
+      )
+      |> assert_issue(fn issue -> assert issue.line_no == 6 end)
+    end
+
+    test "matches the arity when the entry gives one" do
+      @bounded
+      |> to_source_file()
+      |> run_check(AshActionInLoop,
+        allow: [
+          {"MyApp.UnassignDriver", :handle_routes, 1, "A driver overlaps at most one route"},
+          {MyApp.UnassignDriver, :other, 2, "Not this arity"}
+        ]
+      )
+      |> assert_issue(fn issue -> assert issue.line_no == 6 end)
+    end
+
+    test "refuses an entry without a reason" do
+      assert_raise ArgumentError, ~r/reason/, fn ->
+        @bounded
+        |> to_source_file()
+        |> run_check(AshActionInLoop, allow: [{MyApp.UnassignDriver, :handle_routes, ""}])
+      end
+    end
+  end
+
   describe "test code" do
     @fixture_loop """
     defmodule SampleTest do
