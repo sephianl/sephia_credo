@@ -49,16 +49,46 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
       A call counts when it certainly reaches the database, as in
       `SephiaCredo.Checks.AshActionInLoop`. Run Credo after `mix compile`.
 
-      What the check cannot see: which actions use the module, and whether any
-      of them runs in bulk. A change only single-record actions use costs one
-      query per call today, and becomes one per record the day an action that
-      uses it runs in bulk. Nor does it see a context flag that bulk callers set
-      to skip the query. Where that is the design, say so with a
-      `# credo:disable-for-next-line` and the reason.
-      """
-    ]
+      A change or validation is reported only when a bulk action can run it,
+      read from the compiled project: a resource lists it in its global
+      `changes` or `validations`, or an action that lists it is a primary
+      action, is named in an `Ash.bulk_*` or `Ash.update_many` call, a
+      `cascade_*` or `manage_relationship` option, or has a code interface
+      called with anything the code does not show to be one record. A module
+      only single-record actions use, such as an update a job runs on the one
+      record it loaded, costs one query per call and is not reported; it
+      becomes reportable the day a caller runs its action in bulk. A module no
+      compiled resource uses is reported as before. `SephiaCredo.BulkReach`
+      lists what counts.
+
+      An insert of an Oban job whose worker sets `unique` does not count, in a
+      hook or in `notify/1`: `Oban.insert_all/2` does not check uniqueness on
+      Oban's Basic engine, so one insert per job is the correct form there.
+
+      What the check cannot see: a context flag that bulk callers set to skip
+      the query, or a bulk caller outside the project. Where a module is fine
+      for such a reason, name its callback in `.credo.exs` with the reason,
+      rather than marking the line:
+
+          {SephiaCredo.Checks.QueryWithoutBatchCallback,
+           allow: [{MyApp.Changes.Recalculate, :change, "Bulk callers set skip_recalculate"}]}
+      """,
+      params: [
+        allow:
+          "Callbacks whose reports are fine, as `{Module, :function, \"reason\"}` or " <>
+            "`{Module, :function, arity, \"reason\"}`. The reason is required."
+      ]
+    ],
+    param_defaults: [allow: []]
 
   alias SephiaCredo.AshCall
+  alias SephiaCredo.BulkReach
+
+  @impl true
+  def run_on_all_source_files(exec, source_files, params) do
+    :ok = SephiaCredo.Allow.validate!(params, __MODULE__)
+    super(exec, source_files, Keyword.put(params, :bulk_reach, BulkReach.index_key()))
+  end
 
   @callbacks [
     {[:Ash, :Resource, :Validation], {:validate, 3}, {:batch_validate, 3}},
@@ -75,16 +105,24 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
   def run(source_file, params \\ []) do
     issue_meta = IssueMeta.for(source_file, params)
 
+    reach_key = Keyword.get(params, :bulk_reach)
+
     case Credo.Code.ast(source_file) do
-      {:ok, ast} -> ast |> AshCall.modules() |> Enum.flat_map(&module_issues(&1, issue_meta))
-      {:error, _} -> []
+      {:ok, ast} ->
+        ast
+        |> AshCall.modules()
+        |> Enum.flat_map(&module_issues(&1, issue_meta, reach_key))
+        |> SephiaCredo.Allow.reject(source_file, params, __MODULE__)
+
+      {:error, _} ->
+        []
     end
   end
 
   @transaction_hook_names [:before_transaction, :after_transaction, :around_transaction]
   @transaction_hooks {:__transaction_hooks__, 0}
 
-  defp module_issues({module, body, aliases}, issue_meta) do
+  defp module_issues({module, body, aliases}, issue_meta, reach_key) do
     {stripped, transaction_hooks} = split_transaction_hooks(body, module, aliases)
     defs = AshCall.definitions(stripped)
 
@@ -97,7 +135,8 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
         not Map.has_key?(defs, batch),
         costly[@transaction_hooks] == nil,
         call = costly[callback],
-        call != nil do
+        call != nil,
+        BulkReach.reach(reach_key, Module.concat(module)) != :single do
       shape = %{
         hooks?: adds_hook?(defs[callback], module, aliases),
         atomic?: Map.has_key?(defs, {:atomic, 3})

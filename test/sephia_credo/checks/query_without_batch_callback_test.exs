@@ -132,6 +132,46 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> assert_issue(fn issue -> assert issue.message =~ "Ash.Signals" end)
     end
 
+    test "ignores a notifier that inserts a job for a unique worker" do
+      """
+      defmodule SyncDelegatedOrder do
+        use Ash.Notifier
+
+        alias SephiaCredo.Fixtures.UniqueJob
+
+        def notify(%{data: data}), do: %{"id" => data.id} |> UniqueJob.new() |> Oban.insert()
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+
+    test "flags the read a notifier makes after skipping a unique worker's insert" do
+      """
+      defmodule SyncDelegatedOrder do
+        use Ash.Notifier
+
+        alias SephiaCredo.Fixtures.Label
+        alias SephiaCredo.Fixtures.UniqueJob
+
+        def notify(%{data: %{delegated?: true} = data}), do: enqueue(data)
+
+        def notify(%{data: data}) do
+          case Label.get_by_code(data.code) do
+            {:ok, _label} -> enqueue(data)
+            {:error, _} -> :ok
+          end
+        end
+
+        defp enqueue(data), do: %{"id" => data.id} |> UniqueJob.new() |> Oban.insert()
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue(fn issue -> assert issue.message =~ "reaches `Label.get_by_code`" end)
+    end
+
     test "ignores a notifier that does not query" do
       """
       defmodule Broadcast do
@@ -333,5 +373,124 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> run_check(QueryWithoutBatchCallback)
       |> refute_issues()
     end
+
+    test "ignores a unique worker's insert in a hook" do
+      """
+      defmodule NotifyOnce do
+        use Ash.Resource.Change
+
+        alias SephiaCredo.Fixtures.UniqueJob
+
+        def change(changeset, _opts, _context) do
+          Ash.Changeset.after_action(changeset, fn _changeset, record ->
+            {:ok, _job} = Oban.insert(UniqueJob.new(%{id: record.id}))
+            {:ok, record}
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+  end
+
+  # `SephiaCredo.Fixtures.Pallet` lists these modules, and `PalletService` runs
+  # its actions in bulk or one record at a time.
+  describe "actions that run in bulk" do
+    test "flags a change a resource lists in its global changes" do
+      "Stamp" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> assert_issue()
+    end
+
+    test "flags a change on an action an Ash.bulk_update call names" do
+      "Recount" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> assert_issue()
+    end
+
+    test "flags a change on an action whose code interface is handed a list" do
+      "Seal" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> assert_issue()
+    end
+
+    test "flags a change on an action whose code interface is handed a public function's parameter" do
+      "Shift" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> assert_issue()
+    end
+
+    test "ignores a change on an action whose caller takes the result as {:ok, record}" do
+      "Weigh" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> refute_issues()
+    end
+
+    test "ignores a change on an action run on the one record a get interface found" do
+      "Tag" |> pallet_change() |> run_check(QueryWithoutBatchCallback) |> refute_issues()
+    end
+
+    test "ignores a validation on an action that only runs on one record" do
+      """
+      defmodule SephiaCredo.Fixtures.Pallet.Validations.Fits do
+        use Ash.Resource.Validation
+
+        def validate(changeset, _opts, _context) do
+          if Ash.exists?(Ledger), do: :ok, else: {:error, "no ledger"}
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+
+    test "still flags a module no compiled resource uses" do
+      "NotOnAnyAction"
+      |> pallet_change()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue()
+    end
+  end
+
+  describe "allow" do
+    @lookup """
+    defmodule Lookup do
+      use Ash.Resource.Validation
+
+      def validate(_changeset, _opts, _context), do: if(Ash.exists?(Ledger), do: :ok, else: {:error, "none"})
+    end
+    """
+
+    test "leaves alone a callback an entry names" do
+      @lookup
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback,
+        allow: [{Lookup, :validate, "Bulk callers set skip_lookup in the context"}]
+      )
+      |> refute_issues()
+    end
+
+    test "still flags a callback no entry names" do
+      @lookup
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback, allow: [{Lookup, :change, "Not this one"}])
+      |> assert_issue()
+    end
+
+    test "refuses an entry without a reason" do
+      assert_raise ArgumentError, ~r/reason/, fn ->
+        @lookup
+        |> to_source_file()
+        |> run_check(QueryWithoutBatchCallback, allow: [{Lookup, :validate}])
+      end
+    end
+  end
+
+  defp pallet_change(name) do
+    to_source_file("""
+    defmodule SephiaCredo.Fixtures.Pallet.Changes.#{name} do
+      use Ash.Resource.Change
+
+      def change(changeset, _opts, _context) do
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          _rows = Ash.read!(Ledger)
+          changeset
+        end)
+      end
+    end
+    """)
   end
 end
