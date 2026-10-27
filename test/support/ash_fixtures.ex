@@ -116,6 +116,26 @@ defmodule SephiaCredo.Fixtures.LogMutationAtomically do
   def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
 end
 
+defmodule SephiaCredo.Fixtures.LogMutationWhenPrinted do
+  @moduledoc """
+  Adds its hook through a helper only when the line will be printed, with atomic/3 delegating to
+  change/3, like Zelo's MutationLogger.
+  """
+  use Ash.Resource.Change
+
+  @impl true
+  def change(changeset, _opts, _context),
+    do: log_after_action(changeset, Logger.compare_levels(:info, Logger.level()))
+
+  @impl true
+  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+
+  defp log_after_action(changeset, :lt), do: changeset
+
+  defp log_after_action(changeset, _printed),
+    do: Ash.Changeset.after_action(changeset, fn _changeset, record -> {:ok, record} end)
+end
+
 defmodule SephiaCredo.Fixtures.AskAbsentServer do
   @moduledoc "Asks a process that is not running from its atomic/3, like a feature-flag lookup."
   use Ash.Resource.Change
@@ -171,6 +191,11 @@ defmodule SephiaCredo.Fixtures.Bin do
     update :logged_atomically do
       require_atomic?(false)
       change(SephiaCredo.Fixtures.LogMutationAtomically)
+    end
+
+    update :logged_when_printed do
+      require_atomic?(false)
+      change(SephiaCredo.Fixtures.LogMutationWhenPrinted)
     end
   end
 end

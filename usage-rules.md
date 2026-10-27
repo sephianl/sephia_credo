@@ -428,10 +428,15 @@ batching them:
   action hook work to `after_batch/3`; give a notifier a `load/2`. Transaction hooks have no batch
   form, so a change whose transaction hook does work is not reported. A change only single-record
   actions use costs nothing yet, but say so when silencing it.
-- **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so remove
-  `require_atomic? false` and run the action's tests. If the message names a change whose hook the
-  atomic path would skip, give that change the hook in `atomic/3` (or `after_batch/3`) first —
-  otherwise removing the option silently stops the hook from running.
+- **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so without
+  `require_atomic? false` a bulk update is one statement instead of one per record. Removing it is
+  not behaviour-neutral: on the atomic path Ash calls each change's `atomic/3` instead of
+  `change/3`, and `changeset.data` does not hold the row as it was. Read every change on the action
+  first; one that reads a previous value from `changeset.data` (the status an order moves from)
+  needs that read as an expression in `atomic/3` before the option goes. If the message names a
+  change whose hook the atomic path would skip, give that change the hook in `atomic/3` (or
+  `after_batch/3`) first — otherwise removing the option silently stops the hook from running.
+  Passing tests show the action still builds, not that it still behaves the same.
 - **`DeepLoad`** — a load naming more than `max_relationships` relationships, each its own query.
   Find what each caller reads before trimming: a default load in `prepare build(load: ...)` is
   shared by every caller of the action. Where one value of a relationship is needed (a count, an

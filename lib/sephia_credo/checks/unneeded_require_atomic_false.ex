@@ -16,8 +16,20 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
             change set_attribute(:zone_id, arg(:zone_id))
           end
 
-      Remove the option. An action whose change cannot run atomically raises
-      when Ash builds it, so the tests say whether it was needed.
+      Removing the option changes what the action's changes see. On the atomic
+      path Ash calls each change's `atomic/3` instead of `change/3`, and the
+      statement updates each row as it stands in the database, which a bulk
+      update never reads into `changeset.data`. A change that reads the
+      record's previous value, such as the status an order moves from, has to
+      express that read in `atomic/3` instead:
+
+          def atomic(_changeset, _opts, _context),
+            do: {:atomic, %{notified_at: expr(if status == :expected, do: now(), else: notified_at)}}
+
+      Check what each change reads from the record before removing the
+      option. An action whose change cannot run atomically raises when Ash
+      builds it, so the tests say whether the option was needed, but not
+      whether a change still behaves the same.
 
       The check asks Ash: it builds the action with
       `Ash.Changeset.fully_atomic_changeset/4` and no input, which runs every
@@ -186,8 +198,11 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   defp issue(type, name, line, skipped, issue_meta) do
     format_issue(issue_meta,
       message:
-        "`#{type} :#{name}` sets `require_atomic? false`, but Ash builds it atomically. Without it " <>
-          "a bulk #{type} is one statement instead of one per record." <> skipped_note(skipped),
+        "`#{type} :#{name}` sets `require_atomic? false`, but Ash builds it atomically. Without the " <>
+          "option a bulk #{type} is one statement instead of one per record, and Ash calls each " <>
+          "change's `atomic/3` instead of `change/3`. Before removing it, check what the changes " <>
+          "read from the record as it was: a previous value read from `changeset.data` in " <>
+          "`change/3` has to become an expression in `atomic/3`." <> skipped_note(skipped),
       trigger: "require_atomic?",
       line_no: line
     )
@@ -199,7 +214,7 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     names = Enum.map_join(modules, ", ", &"`#{inspect(&1)}`")
     verb = if length(modules) == 1, do: "adds", else: "add"
 
-    " Before removing it: #{names} #{verb} a hook in `change/3` that `atomic/3` does not, so on " <>
-      "the atomic path that hook stops running; add it in `atomic/3` too."
+    " And #{names} #{verb} a hook in `change/3` that `atomic/3` does not, so on the atomic " <>
+      "path that hook stops running; add it in `atomic/3` too."
   end
 end
