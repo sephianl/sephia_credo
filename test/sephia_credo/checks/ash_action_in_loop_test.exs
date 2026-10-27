@@ -279,6 +279,63 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> assert_issue()
     end
 
+    test "flags a loop over a variable another function binds to a list literal" do
+      """
+      defmodule Sample do
+        def empty, do: (labels = []; labels)
+        def run(labels), do: Enum.each(labels, &Ash.update!(&1, %{}))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+
+    test "flags a loop over a variable rebound to what a query returns" do
+      """
+      defmodule Sample do
+        def run(query) do
+          labels = []
+          labels = Ash.read!(query)
+          Enum.each(labels, &Ash.update!(&1, %{}))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+
+    test "flags a loop over a list built with a tail" do
+      """
+      defmodule Sample do
+        def run(first, rest) do
+          Enum.each([first | rest], &Ash.update!(&1, %{}))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+
+    test "counts only the function of Stream.resource that produces elements" do
+      """
+      defmodule Sample do
+        def run(query) do
+          Stream.resource(
+            fn -> Ash.read!(query) end,
+            fn rows -> {Enum.map(rows, & &1.id), Ash.read!(query)} end,
+            fn _rows -> Repo.query!("SELECT 1") end
+          )
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.line_no == 5 end)
+    end
+
     test "ignores an element that carries its own query" do
       """
       defmodule Sample do
@@ -320,6 +377,17 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> to_source_file()
       |> run_check(AshActionInLoop)
       |> refute_issues()
+    end
+
+    test "flags a worker function with a default argument, called without it" do
+      """
+      defmodule Sample do
+        def run(parcels), do: Enum.each(parcels, &SephiaCredo.Fixtures.DefaultArgJob.enqueue(&1))
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.message =~ "Oban.insert_all" end)
     end
 
     test "warns that insert_all skips a unique worker's check" do

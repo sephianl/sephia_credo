@@ -22,10 +22,14 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
       The check asks Ash: it builds the action with
       `Ash.Changeset.fully_atomic_changeset/4` and no input, which runs every
       change's and validation's `atomic/3` (the action's own, global ones and
-      ones added by extensions) without touching the database. A callback that
-      declines without its input leaves the action unreported. Actions in a
-      `Spark.Dsl.Fragment` are read from the nearest enclosing resource
-      (`User.Actions` from `User`). Run Credo after `mix compile`.
+      ones added by extensions) without touching the database. That runs the
+      project's own `atomic/3` callbacks and default functions, each action in
+      a process of its own: one that declines without its input, raises, exits
+      or takes more than five seconds leaves the action unreported. So does a
+      resource with no `domain:` of its own, which Ash cannot build without
+      one. Actions in a `Spark.Dsl.Fragment` are read from the nearest
+      enclosing resource (`User.Actions` from `User`). Run Credo after
+      `mix compile`.
 
       Building atomically is not the same as behaving the same: a change whose
       `atomic/3` leaves out a hook its `change/3` adds stops running that hook
@@ -39,6 +43,8 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   alias Ash.Resource.Info
 
   @compile {:no_warn_undefined, [Ash.Resource.Info, Ash.Changeset, Spark.Dsl]}
+
+  @build_timeout 5_000
 
   @impl true
   def run(source_file, params \\ []) do
@@ -84,7 +90,24 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   # Ash's own answer: it runs each change's and validation's `atomic/3`, which
   # build expressions without touching the database. A callback that needs an
   # input the empty params lack declines or raises, so the action is left alone.
+  # The callbacks are the project's code, so they run in a process of their own:
+  # one that raises, exits or hangs leaves the action unreported instead of
+  # stopping the Credo run.
   defp builds_atomically?(resource, action) do
+    {pid, ref} = spawn_monitor(fn -> exit({:built, atomic_changeset?(resource, action)}) end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, {:built, built?}} -> built?
+      {:DOWN, ^ref, :process, ^pid, _reason} -> false
+    after
+      @build_timeout ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+        false
+    end
+  end
+
+  defp atomic_changeset?(resource, action) do
     match?(
       %{__struct__: Ash.Changeset},
       Ash.Changeset.fully_atomic_changeset(resource, action, %{},
@@ -92,8 +115,8 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
         skip_unknown_inputs: :*
       )
     )
-  rescue
-    _error -> false
+  catch
+    _kind, _reason -> false
   end
 
   defp non_atomic_actions(body) do

@@ -83,6 +83,24 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     |> assert_issue(fn issue -> assert issue.line_no == 6 end)
   end
 
+  test "leaves an action alone when a change's atomic/3 exits" do
+    """
+    defmodule SephiaCredo.Fixtures.Bin do
+      use Ash.Resource
+
+      actions do
+        update :flagged do
+          require_atomic? false
+          change SephiaCredo.Fixtures.AskAbsentServer
+        end
+      end
+    end
+    """
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> refute_issues()
+  end
+
   test "ignores a module that is not a compiled resource" do
     """
     defmodule NotCompiled do

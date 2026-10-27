@@ -69,6 +69,26 @@ defmodule SephiaCredo.Checks.DeepLoadTest do
     end)
   end
 
+  test "reads an attribute redefined from itself as the value before it" do
+    """
+    defmodule Reconcile do
+      alias SephiaCredo.Fixtures.Label
+
+      @label_load [:origin]
+      @label_load @label_load ++ [:twin, parent: @label_load]
+      @label_load [parent: @label_load]
+
+      def load_label(code), do: Label.get_by_code(code, load: @label_load)
+    end
+    """
+    |> to_source_file()
+    |> run_check(DeepLoad)
+    |> assert_issue(fn issue ->
+      assert issue.message =~ "5 relationships"
+      assert issue.message =~ "parent.parent.origin"
+    end)
+  end
+
   test "reads the resource from Ash.read and Ash.Query.load" do
     """
     defmodule Sample do

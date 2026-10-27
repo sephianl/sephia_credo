@@ -104,6 +104,20 @@ defmodule SephiaCredo.Fixtures.LogMutation do
   def atomic(_changeset, _opts, _context), do: :ok
 end
 
+defmodule SephiaCredo.Fixtures.AskAbsentServer do
+  @moduledoc "Asks a process that is not running from its atomic/3, like a feature-flag lookup."
+  use Ash.Resource.Change
+
+  @impl true
+  def change(changeset, _opts, _context), do: changeset
+
+  @impl true
+  def atomic(changeset, _opts, _context) do
+    GenServer.call(:sephia_credo_absent_server, :flag)
+    {:ok, changeset}
+  end
+end
+
 defmodule SephiaCredo.Fixtures.Bin do
   @moduledoc "A resource with `require_atomic? false` actions, needed and not."
   use Ash.Resource, domain: SephiaCredo.Fixtures.Domain
@@ -135,6 +149,11 @@ defmodule SephiaCredo.Fixtures.Bin do
     update :logged do
       require_atomic?(false)
       change(SephiaCredo.Fixtures.LogMutation)
+    end
+
+    update :flagged do
+      require_atomic?(false)
+      change(SephiaCredo.Fixtures.AskAbsentServer)
     end
   end
 end
@@ -182,6 +201,15 @@ defmodule SephiaCredo.Fixtures.UniqueJob do
   def __opts__, do: [queue: :default, unique: [period: 60]]
   def perform(_job), do: :ok
   def enqueue(args), do: Oban.insert(args)
+end
+
+defmodule SephiaCredo.Fixtures.DefaultArgJob do
+  @moduledoc "Stands in for a worker whose `enqueue` takes optional options and whose `__opts__/0` is a map."
+  @compile {:no_warn_undefined, [Oban]}
+
+  def __opts__, do: %{queue: :default}
+  def perform(_job), do: :ok
+  def enqueue(args, opts \\ []), do: Oban.insert(args, opts)
 end
 
 defmodule SephiaCredo.Fixtures.Webhook do

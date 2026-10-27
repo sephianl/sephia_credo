@@ -156,11 +156,11 @@ defmodule SephiaCredo.AshCall do
   """
   def remote_call({:&, _, [{:/, _, [{{:., _, [mod, fun]}, meta, []}, arity]}]}, module, aliases)
       when is_atom(fun) and is_integer(arity),
-      do: classify(expand(mod, module, aliases), mod, fun, meta, nil)
+      do: classify(expand(mod, module, aliases), mod, {fun, arity}, meta, nil)
 
   def remote_call({{:., _, [mod, fun]}, meta, args}, module, aliases)
       when is_atom(fun) and is_list(args) do
-    case classify(expand(mod, module, aliases), mod, fun, meta, args) do
+    case classify(expand(mod, module, aliases), mod, {fun, length(args)}, meta, args) do
       %Call{} = call -> %{call | element_query?: element_query?(args)}
       nil -> nil
     end
@@ -169,22 +169,23 @@ defmodule SephiaCredo.AshCall do
   def remote_call(_node, _module, _aliases), do: nil
 
   # A load with `lazy?: true` only queries for what is not loaded yet.
-  defp classify([:Ash], _mod, fun, meta, args) when fun in [:load, :load!] and is_list(args) do
+  defp classify([:Ash], _mod, {fun, _arity}, meta, args)
+       when fun in [:load, :load!] and is_list(args) do
     if Enum.any?(args, &lazy_option?/1),
       do: nil,
       else: maybe_call("Ash.#{fun}", meta, :read, false)
   end
 
-  defp classify([:Ash], _mod, fun, meta, _args),
+  defp classify([:Ash], _mod, {fun, _arity}, meta, _args),
     do: maybe_call("Ash.#{fun}", meta, @ash_kinds[fun], bulk_api?(fun))
 
-  defp classify([:Oban], _mod, fun, meta, _args) when fun in @oban_inserts,
+  defp classify([:Oban], _mod, {fun, _arity}, meta, _args) when fun in @oban_inserts,
     do: %{call("Oban.#{fun}", meta, :job) | batched?: fun == :insert_all}
 
-  defp classify([_ | _] = segments, mod, fun, meta, args) do
+  defp classify([_ | _] = segments, mod, {fun, _arity} = fun_arity, meta, args) do
     if List.last(segments) == :Repo,
       do: classify_repo(fun, meta, written(mod)),
-      else: classify_module(Module.concat(segments), fun, meta, written(mod), args)
+      else: classify_module(Module.concat(segments), fun_arity, meta, written(mod), args)
   end
 
   defp classify(_segments, _mod, _fun, _meta, _args), do: nil
@@ -201,9 +202,9 @@ defmodule SephiaCredo.AshCall do
         fun in [:insert_all, :update_all, :delete_all]
       )
 
-  defp classify_module(module, fun, meta, name, args) do
+  defp classify_module(module, {fun, arity}, meta, name, args) do
     case interface_kind(module, fun) do
-      nil -> maybe_call("#{name}.#{fun}", meta, job_kind(module, fun), false)
+      nil -> maybe_call("#{name}.#{fun}", meta, job_kind(module, fun, arity), false)
       kind -> maybe_call("#{name}.#{fun}", meta, kind, bulk_interface_call?(args))
     end
   end
@@ -257,22 +258,28 @@ defmodule SephiaCredo.AshCall do
   defp element_query?(_args), do: false
 
   @doc """
-  `:job` when `fun` on `module` inserts an Oban job, read from the compiled
+  `:job` when `fun/arity` on `module` inserts an Oban job, read from the compiled
   module: a function that calls `Oban.insert/2`, `Oban.insert!/2` or
   `Oban.insert_all/2`, directly or through its own module's functions, the way
   a worker's `enqueue/1` wraps its insert.
   """
-  def job_kind(module, fun) do
+  def job_kind(module, fun, arity) do
     with {:ok, definitions} <- compiled_definitions(module),
-         true <- inserts_job?(definitions, fun, MapSet.new()) do
+         true <- inserts_job?(definitions, {fun, arity}, MapSet.new()) do
       if unique_worker?(module), do: :unique_job, else: :job
     else
       _ -> nil
     end
   end
 
+  # `use Oban.Worker` generates `__opts__/0`; a module that inserts jobs may
+  # define its own returning anything.
   defp unique_worker?(module) do
-    function_exported?(module, :__opts__, 0) and Keyword.has_key?(module.__opts__(), :unique)
+    function_exported?(module, :__opts__, 0) and
+      case module.__opts__() do
+        opts when is_list(opts) -> Keyword.keyword?(opts) and Keyword.has_key?(opts, :unique)
+        _opts -> false
+      end
   end
 
   @doc """
@@ -283,9 +290,10 @@ defmodule SephiaCredo.AshCall do
   """
   def hook_skipped_when_atomic?(module) do
     with {:ok, definitions} <- compiled_definitions(module),
-         {:ok, change} <- Map.fetch(definitions, :change),
-         {:ok, atomic} <- Map.fetch(definitions, :atomic) do
-      not Map.has_key?(definitions, :after_batch) and not Map.has_key?(definitions, :before_batch) and
+         {:ok, change} <- Map.fetch(definitions, {:change, 3}),
+         {:ok, atomic} <- Map.fetch(definitions, {:atomic, 3}) do
+      not Map.has_key?(definitions, {:after_batch, 3}) and
+        not Map.has_key?(definitions, {:before_batch, 3}) and
         adds_hook?(change) and not adds_hook?(atomic)
     else
       _ -> false
@@ -314,7 +322,7 @@ defmodule SephiaCredo.AshCall do
   """
   def constant_list?(module, fun) do
     case compiled_definitions(module) do
-      {:ok, %{^fun => [_ | _] = bodies}} -> Enum.all?(bodies, &literal_list?/1)
+      {:ok, %{{^fun, 0} => [_ | _] = bodies}} -> Enum.all?(bodies, &literal_list?/1)
       _ -> false
     end
   end
@@ -340,16 +348,19 @@ defmodule SephiaCredo.AshCall do
   defp project_source?(source),
     do: String.starts_with?(source, File.cwd!()) and not String.contains?(source, "/deps/")
 
+  # One entry per module, replaced when the module is recompiled, so a VM that
+  # runs Credo after every compile holds no stale definitions.
   defp cached_definitions(module) do
-    key = {__MODULE__, :definitions, module, module.module_info(:md5)}
+    key = {__MODULE__, :definitions, module}
+    md5 = module.module_info(:md5)
 
     case :persistent_term.get(key, :missing) do
-      :missing ->
-        definitions = read_definitions(module)
-        :persistent_term.put(key, definitions)
+      {^md5, definitions} ->
         definitions
 
-      definitions ->
+      _missing_or_stale ->
+        definitions = read_definitions(module)
+        :persistent_term.put(key, {md5, definitions})
         definitions
     end
   end
@@ -360,8 +371,8 @@ defmodule SephiaCredo.AshCall do
            :beam_lib.chunks(beam, [:debug_info]),
          {:ok, %{definitions: definitions}} <- backend.debug_info(:elixir_v1, module, data, []) do
       {:ok,
-       Map.new(definitions, fn {{name, _arity}, _kind, _meta, clauses} ->
-         {name, bodies(clauses)}
+       Map.new(definitions, fn {name_arity, _kind, _meta, clauses} ->
+         {name_arity, bodies(clauses)}
        end)}
     else
       _ -> :error
@@ -388,10 +399,22 @@ defmodule SephiaCredo.AshCall do
         {{:., _, [Oban, insert]}, _, _} = node, {_direct?, locals} when insert in @oban_inserts ->
           {node, {true, locals}}
 
+        {:&, _, [{:/, _, [{name, _, context}, arity]}]} = node, {direct?, locals}
+        when is_atom(name) and is_atom(context) and is_integer(arity) ->
+          {node, {direct?, add_defined({name, arity}, definitions, locals)}}
+
+        # The wrapper a default argument generates calls the full clause as `super`.
+        {:super, meta, args} = node, {direct?, locals} when is_list(args) ->
+          case meta[:super] do
+            {_kind, name} ->
+              {node, {direct?, add_defined({name, length(args)}, definitions, locals)}}
+
+            _other ->
+              {node, {direct?, locals}}
+          end
+
         {name, _, args} = node, {direct?, locals} when is_atom(name) and is_list(args) ->
-          if Map.has_key?(definitions, name),
-            do: {node, {direct?, [name | locals]}},
-            else: {node, {direct?, locals}}
+          {node, {direct?, add_defined({name, length(args)}, definitions, locals)}}
 
         node, acc ->
           {node, acc}
@@ -399,6 +422,9 @@ defmodule SephiaCredo.AshCall do
 
     found
   end
+
+  defp add_defined(key, definitions, locals),
+    do: if(Map.has_key?(definitions, key), do: [key | locals], else: locals)
 
   defp written({:__aliases__, _, segments}), do: Enum.map_join(segments, ".", &written_segment/1)
   defp written(_mod), do: "__MODULE__"

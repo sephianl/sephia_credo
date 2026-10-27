@@ -206,18 +206,28 @@ defmodule SephiaCredo.Checks.DeepLoad do
     end
   end
 
+  # An attribute read inside a definition is the value defined before it, as in
+  # Elixir, so `@load @load ++ [:twin]` and attributes naming each other
+  # resolve to a finite tree.
   defp attributes(body) do
     {_ast, attributes} =
       Macro.prewalk(body, %{}, fn
         {:@, _, [{name, _, [value]}]} = node, acc
         when is_atom(name) and (is_list(value) or elem(value, 0) == :++) ->
-          {node, Map.put(acc, name, value)}
+          {node, Map.put(acc, name, inline_attributes(value, acc))}
 
         node, acc ->
           {node, acc}
       end)
 
     attributes
+  end
+
+  defp inline_attributes(value, defined) do
+    Macro.prewalk(value, fn
+      {:@, _, [{name, _, nil}]} when is_atom(name) -> Map.get(defined, name)
+      node -> node
+    end)
   end
 
   defp issue({line, resource, paths}, max, issue_meta) do

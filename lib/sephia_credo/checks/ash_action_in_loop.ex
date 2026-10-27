@@ -87,10 +87,12 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
   defp module_calls({module, body, aliases}) do
     index = AshCall.reach_index(body, module, aliases)
     defs = AshCall.definitions(body)
-    fixed_node? = fixed_node_fun(module, body, aliases)
 
     body
-    |> SephiaCredo.Loop.data_driven_regions(fixed_node?)
+    |> statements()
+    |> Enum.flat_map(fn statement ->
+      SephiaCredo.Loop.data_driven_regions(statement, fixed_node_fun(module, statement, aliases))
+    end)
     |> Enum.concat(helper_regions(body))
     |> Enum.flat_map(fn region ->
       direct = region |> AshCall.calls_in(module, aliases) |> Enum.reject(&preload?/1)
@@ -99,11 +101,15 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     |> Enum.reject(&(&1.batched? or &1.element_query?))
   end
 
-  # A collection is fixed when it is a variable bound to a list literal or
-  # module attribute, or a call to a zero-arity function the compiled module
-  # shows returning a list literal, such as `Webhook.entity_sets()`.
-  defp fixed_node_fun(module, body, aliases) do
-    fixed_vars = fixed_variables(body)
+  defp statements({:__block__, _, statements}), do: statements
+  defp statements(nil), do: []
+  defp statements(statement), do: [statement]
+
+  # A collection is fixed when it is a variable its function only ever binds to
+  # a list literal or module attribute, or a call to a zero-arity function the
+  # compiled module shows returning a list literal, such as `Webhook.entity_sets()`.
+  defp fixed_node_fun(module, statement, aliases) do
+    fixed_vars = fixed_variables(statement)
 
     fn
       {var, _, context} when is_atom(var) and is_atom(context) ->
@@ -123,11 +129,37 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     end
   end
 
-  defp fixed_variables(body) do
+  # A parameter, or a variable also bound by a pattern or to anything else, can
+  # hold a collection of any length where the loop reads it.
+  defp fixed_variables({kind, _, [head, _kw]} = definition) when kind in [:def, :defp] do
+    {_ast, {fixed, unfixed}} =
+      Macro.prewalk(definition, {MapSet.new(), pattern_vars(head)}, fn
+        {:=, _, [{var, _, context}, value]} = node, {fixed, unfixed}
+        when is_atom(var) and is_atom(context) ->
+          if fixed_value?(value),
+            do: {node, {MapSet.put(fixed, var), unfixed}},
+            else: {node, {fixed, MapSet.put(unfixed, var)}}
+
+        {op, _, [pattern, _value]} = node, {fixed, unfixed} when op in [:=, :<-, :->] ->
+          {node, {fixed, MapSet.union(unfixed, pattern_vars(pattern))}}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    MapSet.difference(fixed, unfixed)
+  end
+
+  defp fixed_variables(_statement), do: MapSet.new()
+
+  defp pattern_vars(pattern) do
     {_ast, vars} =
-      Macro.prewalk(body, MapSet.new(), fn
-        {:=, _, [{var, _, context}, value]} = node, acc when is_atom(var) and is_atom(context) ->
-          if fixed_value?(value), do: {node, MapSet.put(acc, var)}, else: {node, acc}
+      Macro.prewalk(pattern, MapSet.new(), fn
+        {:^, _, _}, acc ->
+          {nil, acc}
+
+        {var, _, context} = node, acc when is_atom(var) and is_atom(context) ->
+          {node, MapSet.put(acc, var)}
 
         node, acc ->
           {node, acc}
@@ -136,7 +168,7 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
     vars
   end
 
-  defp fixed_value?(value) when is_list(value), do: true
+  defp fixed_value?(value) when is_list(value), do: SephiaCredo.Loop.fixed_length_list?(value)
   defp fixed_value?({:@, _, [{name, _, nil}]}) when is_atom(name), do: true
   defp fixed_value?(_value), do: false
 

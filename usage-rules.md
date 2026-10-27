@@ -393,3 +393,45 @@ anything stored outside it (Oban job args, serialized terms, registered names), 
 Fix a `UniqueModuleName` report by renaming, and before renaming search for the
 name outside the code too. **Do not silence a layout report to finish a change** — the layout is the
 convention the project opted into; if the check is wrong about it, say so.
+
+### Query cost checks (warning/refactor, opt-in)
+
+`AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `DeepLoad` and
+`RollbackOnSuccess` report database work that multiplies with the rows. The four Ash ones also read
+the compiled project, so run `mix compile` before Credo, and a report on stale code is stale.
+
+Their reports are rarely wrong about what the code does (three of about 630 in two production
+codebases), so the risk is the opposite one: a "fix" that batches work which has to stay one row at
+a time. Before rewriting,
+confirm that the collection really holds many rows and that no step depends on the one before it.
+Each step reading what the previous one wrote, locks taken one by one in a fixed order, and a
+per-row fallback after a bulk call failed are deliberate. Mark those with the reason rather than
+batching them:
+
+```elixir
+# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
+# Each route departs when the previous one ends.
+```
+
+- **`AshActionInLoop`** — a database call once per element of a loop, directly or through the
+  module's own functions; the message names the call and the line it is reached from. Use the
+  batched form it names: one read filtering `id in ^ids` then a map lookup, `Ash.bulk_create/4`,
+  `Ash.bulk_update/4` (same input for every record) or `Ash.update_many/4` (each its own),
+  `Ash.bulk_destroy/4`, `Oban.insert_all/2`. When the worker sets `unique`, `insert_all` on Oban's
+  Basic engine skips that check: drop duplicate args first or keep the inserts.
+- **`QueryWithoutBatchCallback`** — a validation, change or notifier that queries per record in a
+  bulk action. Add `batch_validate/3` or `batch_change/3` doing the query once for the batch; move
+  hook work to `after_batch/3`; give a notifier a `load/2`. A change only single-record actions use
+  costs nothing yet, but say so when silencing it.
+- **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so remove
+  `require_atomic? false` and run the action's tests. If the message names a change whose hook the
+  atomic path would skip, give that change the hook in `atomic/3` (or `after_batch/3`) first —
+  otherwise removing the option silently stops the hook from running.
+- **`DeepLoad`** — a load naming more than `max_relationships` relationships, each its own query.
+  Find what each caller reads before trimming: a default load in `prepare build(load: ...)` is
+  shared by every caller of the action. Where one value of a relationship is needed (a count, an
+  existence check), an aggregate or expression calculation returns it in the main query. A load
+  that needs every relationship it names is fine to keep; `max_relationships` is a budget.
+- **`RollbackOnSuccess`** — a transaction that rolls back on its `{:ok, _}` path: a preview built
+  by doing all the work. Load the state the writes would read once and compute the outcome in
+  memory instead. Keep the rollback on the error path; that one is fine.

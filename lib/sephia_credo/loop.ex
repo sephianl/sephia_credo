@@ -23,7 +23,7 @@ defmodule SephiaCredo.Loop do
         {{:., _, [{:__aliases__, _, segments}, fun]}, _, args} = node, acc
         when is_list(segments) and is_list(args) ->
           if iterating?(segments, fun),
-            do: {node, Enum.filter(args, &lambda?/1) ++ acc},
+            do: {node, per_element_lambdas(segments, fun, args) ++ acc},
             else: {node, acc}
 
         {:for, _, args} = node, acc when is_list(args) ->
@@ -53,7 +53,7 @@ defmodule SephiaCredo.Loop do
         {{:., _, [{:__aliases__, _, segments}, fun]}, _, [collection | _] = args} = node, acc
         when is_list(segments) ->
           if iterating?(segments, fun) and not fixed?(collection, fixed_node?),
-            do: {node, Enum.filter(args, &lambda?/1) ++ acc},
+            do: {node, per_element_lambdas(segments, fun, args) ++ acc},
             else: {node, acc}
 
         {:for, _, args} = node, acc when is_list(args) ->
@@ -70,7 +70,9 @@ defmodule SephiaCredo.Loop do
 
   @reorderings [:reverse, :sort, :uniq, :with_index, :to_list]
 
-  defp fixed?(collection, _fixed_node?) when is_list(collection), do: true
+  defp fixed?(collection, _fixed_node?) when is_list(collection),
+    do: fixed_length_list?(collection)
+
   defp fixed?({:@, _, [{name, _, nil}]}, _fixed_node?) when is_atom(name), do: true
 
   defp fixed?({:.., _, [first, last]}, fixed_node?),
@@ -94,6 +96,13 @@ defmodule SephiaCredo.Loop do
   defp fixed?({:%{}, _, _pairs} = map, _fixed_node?), do: Macro.quoted_literal?(map)
   defp fixed?(collection, fixed_node?), do: fixed_node?.(collection)
 
+  @doc """
+  Whether a list node has a length the code fixes: a list literal, whatever its
+  elements, but not `[head | tail]`, whose tail can be any length.
+  """
+  def fixed_length_list?(list) when is_list(list), do: not match?({:|, _, _}, List.last(list))
+  def fixed_length_list?(_node), do: false
+
   defp bound?(value, _fixed_node?) when is_integer(value), do: true
   defp bound?({:@, _, [{name, _, nil}]}, _fixed_node?) when is_atom(name), do: true
   defp bound?({:-, _, [value]}, fixed_node?), do: bound?(value, fixed_node?)
@@ -110,6 +119,21 @@ defmodule SephiaCredo.Loop do
   defp iterating?([:Stream], _fun), do: true
   defp iterating?([:Task], fun), do: fun == :async_stream
   defp iterating?(_segments, _fun), do: false
+
+  # `Stream.resource/3` and `Stream.transform/4,5` run their start, last and
+  # after functions once; only the function that produces elements runs per
+  # element.
+  defp per_element_lambdas([:Stream], :resource, [_start, next, _after]), do: lambdas([next])
+
+  defp per_element_lambdas([:Stream], :transform, [_enum, _start, reducer, _after]),
+    do: lambdas([reducer])
+
+  defp per_element_lambdas([:Stream], :transform, [_enum, _start, reducer, _last, _after]),
+    do: lambdas([reducer])
+
+  defp per_element_lambdas(_segments, _fun, args), do: lambdas(args)
+
+  defp lambdas(args), do: Enum.filter(args, &lambda?/1)
 
   defp lambda?({:fn, _, _}), do: true
   defp lambda?({:&, _, [_]}), do: true
