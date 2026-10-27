@@ -681,5 +681,24 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> run_check(AshActionInLoop)
       |> assert_issue(fn issue -> assert issue.trigger == "Label.set_zone" end)
     end
+
+    test "flags a comprehension calling a function that shares a definition's name" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def run(labels, actor) do
+          for label <- labels do
+            test(label, actor)
+          end
+        end
+
+        defp test(label, actor), do: Label.set_zone(label, nil, actor: actor)
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
   end
 end

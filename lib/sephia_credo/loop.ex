@@ -174,7 +174,14 @@ defmodule SephiaCredo.Loop do
   defp body_statements({:__block__, _, statements}), do: statements
   defp body_statements(statement), do: [statement]
 
-  defp definition?({name, _, args}) when name in @definitions and is_list(args), do: true
+  # A definition has a `do` body; `test(label)` is a call to a local function.
+  defp definition?({name, _, [_ | _] = args}) when name in @definitions do
+    case List.last(args) do
+      [{:do, _} | _] -> true
+      _other -> false
+    end
+  end
+
   defp definition?(_statement), do: false
 
   defp generator?({:<-, _, _}), do: true
