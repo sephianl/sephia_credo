@@ -35,6 +35,15 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
       record of a bulk action. What it reads belongs in `load/2`, which Ash
       loads for the whole batch before calling `notify/1`.
 
+      Transaction hooks (`before_transaction`, `after_transaction`,
+      `around_transaction`) are left alone. A bulk action runs them once per
+      record and has no batch form for them, since `before_batch/3` and
+      `after_batch/3` run inside the transaction the hooks exist to stay out
+      of. A change that does work in such a hook — a solve, a routing request,
+      a message after commit — is per record by design, so it is not reported
+      at all: a batch callback would trim its action hooks' queries and leave
+      the hooks' round trips exactly as they were.
+
       `atomic/3` only helps an update that runs atomically as a whole; creates
       and non-atomic updates still go through `validate/3` and `change/3`.
       A call counts when it certainly reaches the database, as in
@@ -72,14 +81,22 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
     end
   end
 
+  @transaction_hook_names [:before_transaction, :after_transaction, :around_transaction]
+  @transaction_hooks {:__transaction_hooks__, 0}
+
   defp module_issues({module, body, aliases}, issue_meta) do
-    defs = AshCall.definitions(body)
+    {stripped, transaction_hooks} = split_transaction_hooks(body, module, aliases)
+    defs = AshCall.definitions(stripped)
+
+    costly =
+      AshCall.costly_functions(with_hooks_function(stripped, transaction_hooks), module, aliases)
 
     for {behaviour, callback, batch} <- @callbacks,
         AshCall.uses?(body, behaviour),
         Map.has_key?(defs, callback),
         not Map.has_key?(defs, batch),
-        call = AshCall.costly_functions(body, module, aliases)[callback],
+        costly[@transaction_hooks] == nil,
+        call = costly[callback],
         call != nil do
       shape = %{
         hooks?: adds_hook?(defs[callback], module, aliases),
@@ -123,7 +140,37 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
       "`notify/1` has no batch form. If the write may run inside the action's transaction: " <>
         @signal_advice
 
-  @hooks [:before_action, :after_action, :after_transaction]
+  @hooks [:before_action, :after_action]
+
+  # Swaps each `Ash.Changeset` transaction hook call for the changeset it was
+  # given and collects the hook functions, so the work they do is reached only
+  # through the synthetic `__transaction_hooks__/0`.
+  defp split_transaction_hooks(body, module, aliases) do
+    body
+    |> SephiaCredo.Ast.unpipe()
+    |> Macro.prewalk([], fn
+      {{:., _, [mod, hook]}, _, [changeset | functions]} = node, acc
+      when hook in @transaction_hook_names ->
+        if AshCall.expand(mod, module, aliases) == [:Ash, :Changeset],
+          do: {changeset, functions ++ acc},
+          else: {node, acc}
+
+      node, acc ->
+        {node, acc}
+    end)
+  end
+
+  defp with_hooks_function(body, []), do: body
+
+  defp with_hooks_function(body, hooks) do
+    {name, 0} = @transaction_hooks
+    hooks_def = {:def, [], [{name, [], []}, [do: {:__block__, [], hooks}]]}
+
+    case body do
+      {:__block__, meta, statements} -> {:__block__, meta, statements ++ [hooks_def]}
+      statement -> {:__block__, [], [statement, hooks_def]}
+    end
+  end
 
   defp adds_hook?(clauses, module, aliases) do
     {_ast, found?} =
