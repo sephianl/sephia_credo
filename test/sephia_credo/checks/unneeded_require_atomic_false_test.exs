@@ -65,6 +65,52 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     end)
   end
 
+  test "does not name a change whose atomic/3 adds its hook through change/3" do
+    """
+    defmodule SephiaCredo.Fixtures.Bin do
+      use Ash.Resource
+
+      actions do
+        update :logged_atomically do
+          require_atomic? false
+          change SephiaCredo.Fixtures.LogMutationAtomically
+        end
+      end
+    end
+    """
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> assert_issue(fn issue -> refute issue.message =~ "Before removing it" end)
+  end
+
+  test "leaves alone an un-archive action whose upgrade read hides archived rows" do
+    issues =
+      """
+      defmodule SephiaCredo.Fixtures.Shelf do
+        use Ash.Resource
+
+        actions do
+          update :restore do
+            require_atomic? false
+          end
+
+          update :restore_through_archived do
+            require_atomic? false
+          end
+
+          update :rename do
+            require_atomic? false
+          end
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(UnneededRequireAtomicFalse)
+      |> assert_issues()
+
+    assert issues |> Enum.map(& &1.line_no) |> Enum.sort() == [10, 14]
+  end
+
   test "reads a fragment's actions from the resource that includes it" do
     """
     defmodule SephiaCredo.Fixtures.Crate.Actions do

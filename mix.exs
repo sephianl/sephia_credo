@@ -1,7 +1,7 @@
 defmodule SephiaCredo.MixProject do
   use Mix.Project
 
-  @version "0.10.0"
+  @version "0.10.1"
   @description "Credo checks for common Elixir pitfalls"
   @github_url "https://github.com/sephianl/sephia_credo"
 
@@ -33,6 +33,7 @@ defmodule SephiaCredo.MixProject do
       {:credo, "~> 1.7"},
       {:igniter, "~> 0.7", optional: true},
       {:ash, "~> 3.36", only: :test},
+      {:ash_archival, "~> 2.0", only: :test},
       {:ex_check, "~> 0.16", only: :dev, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]

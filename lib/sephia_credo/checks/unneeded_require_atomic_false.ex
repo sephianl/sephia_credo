@@ -37,12 +37,19 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
       in `atomic/3` before removing the option. An `atomic/3` that inspects
       the action's input can still decline once input is given, which the
       tests will show.
+
+      An action that un-archives a row on an `AshArchival` resource is left
+      alone. An atomic update finds its row through `atomic_upgrade_with` or
+      the primary read, and AshArchival hides archived rows from every read
+      not in `exclude_read_actions`, so the atomic path finds nothing to
+      un-archive and fails with `StaleRecord`.
       """
     ]
 
   alias Ash.Resource.Info
 
-  @compile {:no_warn_undefined, [Ash.Resource.Info, Ash.Changeset, Spark.Dsl]}
+  @compile {:no_warn_undefined,
+            [Ash.Resource.Info, Ash.Changeset, Spark, Spark.Dsl, AshArchival.Resource.Info]}
 
   @build_timeout 5_000
 
@@ -72,9 +79,39 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     for {type, name, line} <- non_atomic_actions(body),
         action = Info.action(resource, name, type),
         action != nil,
+        not unarchives_hidden_row?(resource, action),
         builds_atomically?(resource, action) do
       issue(type, name, line, skipped_hooks(resource, action), issue_meta)
     end
+  end
+
+  defp unarchives_hidden_row?(resource, action) do
+    AshArchival.Resource in Spark.extensions(resource) and
+      writes_attribute?(action, AshArchival.Resource.Info.archive_attribute!(resource)) and
+      archived_rows_hidden_from?(resource, upgrade_read(resource, action))
+  end
+
+  defp writes_attribute?(action, attribute) do
+    attribute in action.accept or
+      Enum.any?(action.changes, fn
+        %{change: {Ash.Resource.Change.SetAttribute, opts}} -> opts[:attribute] == attribute
+        _change -> false
+      end)
+  end
+
+  defp upgrade_read(_resource, %{atomic_upgrade_with: name}) when is_atom(name) and name != nil,
+    do: name
+
+  defp upgrade_read(resource, _action) do
+    case Info.primary_action(resource, :read) do
+      %{name: name} -> name
+      nil -> nil
+    end
+  end
+
+  defp archived_rows_hidden_from?(resource, read) do
+    AshArchival.Resource.Info.archive_base_filter?(resource) or
+      read not in AshArchival.Resource.Info.archive_exclude_read_actions!(resource)
   end
 
   defp skipped_hooks(resource, action) do

@@ -104,6 +104,18 @@ defmodule SephiaCredo.Fixtures.LogMutation do
   def atomic(_changeset, _opts, _context), do: :ok
 end
 
+defmodule SephiaCredo.Fixtures.LogMutationAtomically do
+  @moduledoc "Logs from the same after_action hook on both paths, its atomic/3 delegating to change/3."
+  use Ash.Resource.Change
+
+  @impl true
+  def change(changeset, _opts, _context),
+    do: Ash.Changeset.after_action(changeset, fn _changeset, record -> {:ok, record} end)
+
+  @impl true
+  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+end
+
 defmodule SephiaCredo.Fixtures.AskAbsentServer do
   @moduledoc "Asks a process that is not running from its atomic/3, like a feature-flag lookup."
   use Ash.Resource.Change
@@ -154,6 +166,49 @@ defmodule SephiaCredo.Fixtures.Bin do
     update :flagged do
       require_atomic?(false)
       change(SephiaCredo.Fixtures.AskAbsentServer)
+    end
+
+    update :logged_atomically do
+      require_atomic?(false)
+      change(SephiaCredo.Fixtures.LogMutationAtomically)
+    end
+  end
+end
+
+defmodule SephiaCredo.Fixtures.Shelf do
+  @moduledoc "An archived resource, whose un-archive actions an atomic update cannot find the row for."
+  use Ash.Resource, domain: SephiaCredo.Fixtures.Domain, extensions: [AshArchival.Resource]
+
+  archive do
+    exclude_read_actions([:archived])
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:name, :string, public?: true)
+  end
+
+  actions do
+    defaults([:read])
+
+    read :archived do
+      filter(expr(not is_nil(archived_at)))
+    end
+
+    update :restore do
+      require_atomic?(false)
+      change(set_attribute(:archived_at, nil))
+    end
+
+    update :restore_through_archived do
+      require_atomic?(false)
+      atomic_upgrade_with(:archived)
+      change(set_attribute(:archived_at, nil))
+    end
+
+    update :rename do
+      require_atomic?(false)
+      accept([:name])
     end
   end
 end
@@ -231,6 +286,7 @@ defmodule SephiaCredo.Fixtures.Domain do
 
     resource(SephiaCredo.Fixtures.Note)
     resource(SephiaCredo.Fixtures.Bin)
+    resource(SephiaCredo.Fixtures.Shelf)
     resource(SephiaCredo.Fixtures.Crate)
   end
 end
