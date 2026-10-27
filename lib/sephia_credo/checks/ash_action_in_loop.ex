@@ -31,7 +31,9 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
       `Oban.insert/2`. Generic actions and calculation interfaces may never
       query, so they are not counted. A loop over a list literal, a module
       attribute, `Enum.group_by/2` or `Enum.chunk_every/2`, and one bulk call
-      per chunk, are not reported. Run Credo after `mix compile`. `Ash.load`
+      per chunk, are not reported, nor is a `for` whose body defines tests or
+      functions: it runs once, at compile time, and the tests and functions it
+      defines are checked like any other. Run Credo after `mix compile`. `Ash.load`
       and `Repo.preload` directly in a loop are left to
       `SephiaCredo.Checks.PreloadInLoop`.
 

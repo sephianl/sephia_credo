@@ -593,4 +593,69 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> assert_issue()
     end
   end
+
+  describe "comprehensions that define code" do
+    test "ignores a comprehension that generates a test per element" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        alias SephiaCredo.Fixtures.Label
+
+        @writers [:admin]
+
+        for role <- actor_roles() -- @writers do
+          @tag role: role
+          test "rejects \#{role}", %{label: label} do
+            actor = create_actor(unquote(role))
+            assert {:error, _} = Label.set_zone(label, nil, actor: actor)
+          end
+        end
+
+        describe "per role" do
+          for role <- actor_roles() do
+            test "reads as \#{role}", %{label: label} do
+              assert {:ok, _} = Label.get_by_code(label.code, actor: unquote(role))
+            end
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores a comprehension that generates a function per element" do
+      """
+      defmodule Sample do
+        for table <- tables() do
+          def unquote(:"count_\#{table}")(), do: Repo.aggregate(unquote(table), :count)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a loop inside a generated test" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        alias SephiaCredo.Fixtures.Label
+
+        for role <- actor_roles() do
+          test "moves every label as \#{role}", %{labels: labels} do
+            Enum.each(labels, &Label.set_zone(&1, nil, actor: unquote(role)))
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.trigger == "Label.set_zone" end)
+    end
+  end
 end
