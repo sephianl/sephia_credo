@@ -164,7 +164,7 @@ Three opt-in *(Design)* checks that hold a codebase to one layout. None is in th
 
 ### Removed
 
-- `NoDateTimeOperatorCompare` — superseded by `StructComparisonOperator`. See the "Upgrading from 0.1" section of the README for the one-line migration.
+- `NoDateTimeOperatorCompare` — superseded by `StructComparisonOperator`. In `.credo.exs`, replace the old tuple with `{SephiaCredo.Checks.StructComparisonOperator, []}`.
 
 ## [0.1.1] - 2026-04-17
 

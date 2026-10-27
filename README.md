@@ -68,12 +68,18 @@ mix deps.get
           {SephiaCredo.Checks.UnusedSetupKeysInTests, []},
           {SephiaCredo.Checks.UnusedSetupKeysPerTest, []},
           {SephiaCredo.Checks.UtcCalendarDate, local_date_call: "LocalTime.today()"}
-          # Opt-in (not enabled by default):
-          # {SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll, []}
-          # Layout, opt-in: they encode a folder convention, see "Layout checks" below.
+          # Opt-in, see "Opt-in checks" below:
+          # {SephiaCredo.Checks.SysGetStateWithoutTimeoutInPoll, []},
+          # Layout: they encode a folder convention.
           # {SephiaCredo.Checks.ModuleLayout, included_paths: ["lib/my_app/"]},
           # {SephiaCredo.Checks.TestLayout, []},
-          # {SephiaCredo.Checks.UniqueModuleName, included_paths: ["lib/my_app/"]}
+          # {SephiaCredo.Checks.UniqueModuleName, included_paths: ["lib/my_app/"]},
+          # Query cost: run Credo after `mix compile`.
+          # {SephiaCredo.Checks.AshActionInLoop, []},
+          # {SephiaCredo.Checks.DeepLoad, max_relationships: 4},
+          # {SephiaCredo.Checks.QueryWithoutBatchCallback, []},
+          # {SephiaCredo.Checks.RollbackOnSuccess, []},
+          # {SephiaCredo.Checks.UnneededRequireAtomicFalse, []}
         ]
       }
     }
@@ -81,59 +87,45 @@ mix deps.get
 }
 ```
 
-## Upgrading from 0.3
-
-0.4.0 and 0.5.0 were tagged but never published to Hex, so 0.3.0 is the previous release on Hex and this section covers 0.4, 0.5 and 0.6.
-
-`UnusedSetupKeysInTests` now reports on the **binding line** inside the `setup` block — the line to delete — instead of once on the `setup do` line. A `# credo:disable-for-next-line SephiaCredo.Checks.UnusedSetupKeysInTests` comment sitting above `setup do` therefore suppresses nothing any more, and the issues it was hiding will reappear. Move the comment down to the binding it covers, or switch that file to `# credo:disable-for-this-file`.
-
-Eleven checks are new and enabled by default in the generated config — `EnumAtInLoop`, `KeywordBagParameter`, `MapAsSet`, `MultiStepMutationWithoutTransaction`, `PatternMatchInFunctionHead`, `PreloadInLoop`, `RepoInAshResource`, `ShadowedAlias`, `TrivialWrapperFunction`, `UndefinedDocReference`, `UtcCalendarDate`. Adding them to an existing `.credo.exs` is opt-in; nothing changes until you do. `MultiStepMutationWithoutTransaction` sees Ash code-interface calls only once you list your resource modules in `ash_resources:`, and `UndefinedDocReference` reads every file in one pass, so its first run on an existing codebase is worth taking as a backlog rather than as a build failure. `UtcCalendarDate` encodes the assumption that the project's business day is a local timezone — a project that genuinely keys its data on the UTC day should leave it out.
-
-## Upgrading from 0.2
-
-`UnusedSetupKeysPerTest` now flags only a test that consumes **none** of the setup keys in scope for it, instead of every test that fails to consume all of them. The old rule treated a shared fixture as a defect and was too noisy to enable — on a 767-file suite it reported 1747 issues, against 152 under the new rule. No config change is needed; expect far fewer reports.
-
-Both setup-key checks now follow a context handed to a `def`/`defp` in the same file, so `analyze(ctx, ...)` helper patterns no longer report their keys as unused.
-
-## Upgrading from 0.1
-
-`NoDateTimeOperatorCompare` has been replaced with the more general `StructComparisonOperator` (now also covers `Decimal` and `Version`, with a configurable `extra_modules` list). Update your `.credo.exs`: replace the old tuple with `{SephiaCredo.Checks.StructComparisonOperator, []}`.
+The installer adds only the checks enabled by default. The [changelog](CHANGELOG.md) lists what changes between releases, including the config changes an upgrade needs.
 
 ## Checks
+
+Checks marked *opt-in* are not in the generated config. Each has its own section below: [opt-in checks](#opt-in-checks), [layout checks](#layout-checks-opt-in) and [query cost checks](#query-cost-checks-opt-in).
 
 | Check | Category | Description |
 |---|---|---|
 | `AppendInLoop` | Refactor | Flags O(n²) `++` inside loops (`reduce`, `fold`, `for/reduce`, recursive functions) |
+| `AshActionInLoop` | Warning *(opt-in)* | Flags a database call that runs once per element of a loop, directly or through the module's own functions |
 | `AshCodeInterfaceReadWithArgs` | Warning | Flags `define :name, action: :read, args: [...]` inside `code_interface` — Ash's generic `:read` action raises at runtime when called with args |
 | `AssertWithoutAssertion` | Warning | Flags `assert pattern = expr` in tests where the bound variables are never used — the match succeeds vacuously |
 | `ChangelogInDoc` | Readability | Flags a doc attribute narrating the code's own history — what it used to do, which alternative was rejected, which incident prompted the fix |
+| `DeepLoad` | Refactor *(opt-in)* | Flags a load naming more than `max_relationships` relationships, each its own query |
 | `DisproportionateModuleDoc` | Readability | Flags a `@moduledoc` large relative to its module — prose carrying a rule, a contract or a data set the code should carry |
 | `EnumAtInLoop` | Refactor | Flags `Enum.at` with a computed or negative index inside a loop — O(n) per element, so O(n²) overall |
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
+| `ModuleLayout` | Design *(opt-in)* | Flags a module under `included_paths` whose file path does not spell its name |
 | `MultiStepMutationWithoutTransaction` | Warning | Flags a function performing 2+ database mutations outside a transaction — a mid-sequence failure leaves partial state |
 | `PatternMatchInFunctionHead` | Refactor | Flags a single-clause function whose whole body is a `case` on one of its own parameters |
 | `PreloadInLoop` | Warning | Flags `Repo.preload` / `Ash.load` inside `Enum.*`, `Stream.*`, `Task.async_stream` or `for` — one query per element (N+1) |
 | `ProcessSleepInTests` | Refactor | Flags `Process.sleep` in `*_test.exs` files — causes flakes and slows the suite |
 | `ProjectImport` | Design | Flags `import` of the project's own modules — callers stop being searchable and the importer becomes a compile-time dependent |
+| `QueryWithoutBatchCallback` | Warning *(opt-in)* | Flags a validation, change or notifier that queries per record in a bulk action because it lacks the batch callback |
 | `RawRuntimeError` | Warning | Flags `raise "msg"` and `raise RuntimeError, ...` — error trackers can't group these meaningfully |
 | `RepoInAshResource` | Warning | Flags a statement-executing `Repo` call inside an Ash resource, change, validation, calculation or preparation — no tenant scoping, no notifications, no authorization |
+| `RollbackOnSuccess` | Warning *(opt-in)* | Flags a transaction that rolls back on its `{:ok, _}` path: a preview that does all the work |
 | `ShadowedAlias` | Warning | Flags two aliases in one scope sharing a final segment — every call resolves to the second and the first is unreachable, with no compiler warning |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
+| `TestLayout` | Design *(opt-in)* | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/` |
 | `TrivialWrapperFunction` | Refactor | Flags a single-clause `defp` that only forwards its arguments to another module |
 | `UndefinedDocReference` | Warning | Flags a backticked module reference — in a doc, a `description:` or a `raise` message — that names no module in the project or its dependencies |
+| `UniqueModuleName` | Design *(opt-in)* | Flags two modules under `included_paths` ending in the same name — their aliases silently shadow each other |
+| `UnneededRequireAtomicFalse` | Warning *(opt-in)* | Flags `require_atomic? false` on an update or destroy that Ash builds atomically |
 | `UnusedSetupKeysInTests` | Design | Flags `setup` fixture work no test in scope reads — the unused-variable warning the compiler can't give you |
 | `UnusedSetupKeysPerTest` | Design | Flags a test that consumes none of the setup keys in scope for it |
 | `UtcCalendarDate` | Warning | Flags a calendar date taken from the UTC clock — `Date.utc_today()`, or `utc_now()` collapsed with `to_date/1` — which is the previous day's date for the first hours of every local day |
-
-Layout checks, opt-in — see [Layout checks](#layout-checks-opt-in):
-
-| Check | Category | Description |
-|---|---|---|
-| `ModuleLayout` | Design | Flags a module under `included_paths` whose file path does not spell its name |
-| `TestLayout` | Design | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/` |
-| `UniqueModuleName` | Design | Flags two modules under `included_paths` ending in the same name — their aliases silently shadow each other |
 
 ### AppendInLoop
 
@@ -309,10 +301,6 @@ Elixir's comparison operators (`<`, `>`, `==`, etc.) use Erlang's term order on 
 
 The operators are treated asymmetrically. For `<`, `>`, `<=`, `>=`, one recognisable side is enough to flag — those operators are only meaningful on ordered structs anyway. For `==` and `!=`, *both* sides must be recognisable struct values, so a comparison like `record.field == ~U[...]` is left alone: the left side could just as easily be `nil`.
 
-### SysGetStateWithoutTimeoutInPoll *(opt-in)*
-
-Inside a polling fn (configurable via `poll_functions:`, defaults to `[:wait_until]`), `:sys.get_state(pid)` without an explicit timeout uses the default 5-second timeout. If the GenServer is blocked (e.g. by cascading PubSub), the call raises `:exit` — which `rescue` doesn't catch — and the test crashes. Pass a short explicit timeout AND wrap in `try ... catch :exit, _ -> false`. Add this check manually to `.credo.exs` if you use poll-style test helpers.
-
 ### TrivialWrapperFunction
 
 A private function whose whole body is one call to another module, passing its parameters straight through, adds a name and nothing else — and hides which module actually does the work. Call the target at the call site and delete the wrapper.
@@ -393,9 +381,21 @@ Test files are checked too, and exempting them is what lets the drift back in: a
 
 A project that genuinely keys its data on the UTC day should disable this check rather than fight it. Individual UTC-keyed values — a UTC-partitioned object key, a retention cutoff defined in UTC — are the case for `# credo:disable-for-next-line`.
 
+## Opt-in checks
+
+### SysGetStateWithoutTimeoutInPoll
+
+Inside a polling fn (configurable via `poll_functions:`, defaults to `[:wait_until]`), `:sys.get_state(pid)` without an explicit timeout uses the default 5-second timeout. If the GenServer is blocked (e.g. by cascading PubSub), the call raises `:exit` — which `rescue` doesn't catch — and the test crashes. Pass a short explicit timeout AND wrap in `try ... catch :exit, _ -> false`. Add this check manually to `.credo.exs` if you use poll-style test helpers.
+
 ## Layout checks *(opt-in)*
 
 Three checks hold a codebase to one convention: a module lives at the path its name spells, a test mirrors its module's file, and no two modules end in the same name. They are not in the generated config because they encode a layout rather than a pitfall; enable the ones whose layout you follow.
+
+`UniqueModuleName` and `TestLayout` read modules from other files, once per run. They resolve `included_paths` and `lib_paths` against the folder holding the checked file's `lib/` or `test/`, so in `credo diff` the merge-base pass reads the merge-base tree.
+
+### ModuleLayout
+
+A module under `included_paths` lives at the path its name spells:
 
 ```text
 MyApp.Planner.Solver.ModelBuilder  lib/my_app/planner/solver/model_builder.ex
@@ -403,39 +403,54 @@ MyApp.Geography                    lib/my_app/geography/geography.ex
 MyApp.Planner.Route.Worker         lib/my_app/planner/resources/route/worker.ex
 ```
 
-A domain module may sit in its own folder, as `MyApp.Geography` does, and `resources` is a folder that is never part of a name, so it is ignored on both sides. `ModuleLayout` skips Ash resource code, whose placement is a convention of its own. The fix for `ModuleLayout` and `TestLayout` is a `git mv` that keeps the module name; for `UniqueModuleName` it is a rename.
+A domain module may sit in its own folder, as `MyApp.Geography` does, and `resources` is a folder that is never part of a name, so it is ignored on both sides. Ash resource code is skipped, since its placement is a convention of its own. The fix is a `git mv` that keeps the module name.
 
-`UniqueModuleName` and `TestLayout` read modules from other files, once per run. They resolve `included_paths` and `lib_paths` against the folder holding the checked file's `lib/` or `test/`, so in `credo diff` the merge-base pass reads the merge-base tree.
+### TestLayout
+
+A `<Module>Test` mirrors `<Module>`'s file, so `lib/my_app/route/changes/set_current_stop.ex` is tested in `test/my_app/route/changes/set_current_stop_test.exs`. Tests named after anything else, such as a feature or a flow, are not checked, and a module's tests may be split over `<module>_<part>_test.exs` files beside the main one. `lib_paths` (default `["lib"]`) lists the folders whose modules tests are matched against. The fix is a `git mv`, in the same PR as the module's.
+
+### UniqueModuleName
+
+No two modules under `included_paths` end in the same name. `alias A.DepotDay` followed by `alias B.DepotDay` compiles, and every later `DepotDay` means the second. `ShadowedAlias` catches the collision in the file where it happens; this check keeps it from being possible. The fix is a rename.
 
 ## Query cost checks *(opt-in)*
 
 Five checks for database work that multiplies with the rows. They report facts the code shows, not style: each names the call, the line it is reached from, and why it runs that often, and suggests the batched form. The four Ash ones read the compiled project, so run Credo after `mix compile`; without a compiled project they see less, never more.
 
-| Check | Category | Description |
-|---|---|---|
-| `AshActionInLoop` | Warning | A database call that runs once per element of a loop, directly or through the module's own functions |
-| `QueryWithoutBatchCallback` | Warning | A validation, change or notifier that queries per record in a bulk action because it lacks the batch callback |
-| `UnneededRequireAtomicFalse` | Warning | `require_atomic? false` on an update or destroy that Ash builds atomically |
-| `DeepLoad` | Refactor | A load naming more than `max_relationships` relationships, each its own query |
-| `RollbackOnSuccess` | Warning | A transaction that rolls back on its `{:ok, _}` path: a preview that does all the work |
-
-```elixir
-{SephiaCredo.Checks.AshActionInLoop, []},
-{SephiaCredo.Checks.QueryWithoutBatchCallback, []},
-{SephiaCredo.Checks.UnneededRequireAtomicFalse, []},
-{SephiaCredo.Checks.DeepLoad, max_relationships: 4},
-{SephiaCredo.Checks.RollbackOnSuccess, []}
-```
-
 A call counts as a database call only when it certainly is one: the `Ash` read and write API, an Ecto repo, `Oban.insert/2` or a function the compiled module shows calling it, and a code interface of a create, read, update or destroy action on a resource with a database data layer. Generic actions, calculation interfaces, `lazy?: true` loads and resources kept in memory may never query, so they are not counted.
 
-**`AshActionInLoop`** follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`). The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2` (with a warning for workers that set `unique`, which the Basic engine does not check in `insert_all`), or one SQL statement over an array.
+### AshActionInLoop
 
-**`QueryWithoutBatchCallback`** reports a `validate/3` or `change/3` (including the hooks it adds) that reaches a database call while the module lacks `batch_validate/3` or `batch_change/3`: Ash then calls it once per record in a bulk action. A hook's work moves to `after_batch/3`. When it tells another resource what happened, an `:after_action` signal (`Ash.Signals`) fits: declare it on the action with `emit`, or emit it with `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that is not an attribute. A bulk action emits `:after_action` signals once per batch, and a create, update or destroy listener, or a generic one with `batch?: true`, handles the batch in one call. A notifier's `notify/1` runs once per notification; what it reads belongs in `load/2`, which Ash loads for the whole batch.
+`AshActionInLoop` follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`). The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2` (with a warning for workers that set `unique`, which the Basic engine does not check in `insert_all`), or one SQL statement over an array.
 
-**`UnneededRequireAtomicFalse`** asks Ash: it builds the action with `Ash.Changeset.fully_atomic_changeset/4`, which runs every change's and validation's `atomic/3` without touching the database. Those callbacks, and the action's default functions, are your code, so each action is built in a process of its own: one that raises, exits or takes more than five seconds leaves the action unreported. When a change adds a hook in `change/3` that its `atomic/3` leaves out, directly or through the module's own functions, the message names it, since removing the option stops that hook from running. An action that un-archives a row on an `AshArchival` resource is not reported: the read an atomic update finds its row through hides archived rows unless it is in `exclude_read_actions`.
+### DeepLoad
 
-**`DeepLoad`** counts relationships from the compiled resource, only where it knows the resource: a read action's `prepare build(load: ...)`, a code interface's `load:`, and `Ash.read/2`, `Ash.get/3` or `Ash.Query.load/2` on a named resource. Module attributes are followed anywhere in the tree. Manual relationships and ones into resources kept in memory are not counted.
+`DeepLoad` counts relationships from the compiled resource, only where it knows the resource: a read action's `prepare build(load: ...)`, a code interface's `load:`, and `Ash.read/2`, `Ash.get/3` or `Ash.Query.load/2` on a named resource. Module attributes are followed anywhere in the tree. Manual relationships and ones into resources kept in memory are not counted.
+
+Where the caller needs one value of a relationship (a count, a sum, an existence check), an aggregate or an expression calculation returns it in the main query. Where it needs the related records, keep the load: it is already one query per relationship however many rows there are, and reading them per record instead is the N+1 the load avoids.
+
+### QueryWithoutBatchCallback
+
+`QueryWithoutBatchCallback` reports a `validate/3` or `change/3` (including the hooks it adds) that reaches a database call while the module lacks `batch_validate/3` or `batch_change/3`: Ash then calls it once per record in a bulk action. A hook's work moves to `after_batch/3`. When it tells another resource what happened, an `:after_action` signal (`Ash.Signals`) fits: declare it on the action with `emit`, or emit it with `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that is not an attribute. A bulk action emits `:after_action` signals once per batch, and a create, update or destroy listener, or a generic one with `batch?: true`, handles the batch in one call. A notifier's `notify/1` runs once per notification; what it reads belongs in `load/2`, which Ash loads for the whole batch.
+
+### RollbackOnSuccess
+
+A transaction that rolls back when its work succeeds is a preview built by doing the work: every write, hook and notification runs and is then thrown away. It costs as much as the real thing, and a page that shows the preview and then commits pays twice.
+
+```elixir
+Repo.transaction(fn ->
+  case run(load_bearer, scans) do
+    {:ok, stats} -> Repo.rollback({:planned, stats})
+    {:error, reason} -> Repo.rollback(reason)
+  end
+end)
+```
+
+Predict the outcome from what the writes would read: load that state once and compute the effects in memory. A rollback on the error path is fine; the check reports one on the `{:ok, _}` path or as the transaction's last expression. `{:ok, nil}`, `{:ok, false}` and `{:ok, []}` count as a read that found nothing, not as success.
+
+### UnneededRequireAtomicFalse
+
+`UnneededRequireAtomicFalse` asks Ash: it builds the action with `Ash.Changeset.fully_atomic_changeset/4`, which runs every change's and validation's `atomic/3` without touching the database. Those callbacks, and the action's default functions, are your code, so each action is built in a process of its own: one that raises, exits or takes more than five seconds leaves the action unreported. When a change adds a hook in `change/3` that its `atomic/3` leaves out, directly or through the module's own functions, the message names it, since removing the option stops that hook from running. An action that un-archives a row on an `AshArchival` resource is not reported: the read an atomic update finds its row through hides archived rows unless it is in `exclude_read_actions`.
 
 ### Edge cases
 
