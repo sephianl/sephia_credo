@@ -25,11 +25,13 @@ defmodule SephiaCredo.Checks.DeepLoad do
       expression calculations come back with the main query and are not
       counted. Module attributes holding the load are followed.
 
-      Whether a relationship is needed depends on what the caller reads from
-      it. Load only what this caller uses; where it needs one value of a
-      relationship, such as a count, an existence check or a field of the
-      first row, an aggregate or an expression calculation returns it in the
-      main query.
+      Where the caller needs one value of a relationship, such as a count, a
+      sum, an existence check or a field of the first row, an aggregate or an
+      expression calculation returns it in the main query instead of a load.
+      Where it needs the related records themselves, the load is already the
+      batched way to get them: one query per relationship however many rows
+      there are. Do not replace it with reads per record, which is the N+1
+      this check is not asking for.
 
       The count is a lower bound: a module calculation can load relationships
       of its own, and a load the check cannot resolve to a resource is not
@@ -237,8 +239,10 @@ defmodule SephiaCredo.Checks.DeepLoad do
       message:
         "This load names #{length(paths)} relationships of `#{inspect(resource)}` (max #{max}): " <>
           "#{named}. Ash loads each with its own query, so it costs at least #{length(paths)} " <>
-          "queries after the main read. Load only what the caller uses; for one value of a " <>
-          "relationship, an aggregate or expression calculation returns it in the main query.",
+          "queries after the main read. Where the caller needs one value of a relationship " <>
+          "(a count, a sum, a flag, a field of the first row), an aggregate or expression " <>
+          "calculation returns it in the main query; where it needs the records, keep the " <>
+          "load rather than reading them per record.",
       trigger: "load",
       line_no: line
     )

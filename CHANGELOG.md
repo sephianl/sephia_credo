@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-10-27
+
+### Changed
+
+- `DeepLoad`'s message and explanation lead with the fix it is after: an aggregate or expression calculation where the caller needs one value of a relationship. Where the caller needs the records, they now say to keep the load, since it is already one query per relationship however many rows there are; "load only what the caller uses" read as an invitation to fetch the records per record instead, which is the N+1 the load avoids.
+
 ## [0.10.1] - 2026-10-27
 
 ### Fixed
