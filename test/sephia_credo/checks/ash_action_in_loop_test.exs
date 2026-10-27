@@ -390,18 +390,42 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> assert_issue(fn issue -> assert issue.message =~ "Oban.insert_all" end)
     end
 
-    test "warns that insert_all skips a unique worker's check" do
+    test "ignores one insert per job for a worker that sets unique" do
       """
       defmodule Sample do
         alias SephiaCredo.Fixtures.UniqueJob
 
-        def run(ids), do: Enum.each(ids, &UniqueJob.enqueue(%{id: &1}))
+        def run(ids) do
+          Enum.each(ids, &UniqueJob.enqueue(%{id: &1}))
+          Enum.each(ids, &Oban.insert(UniqueJob.new(%{id: &1})))
+          for id <- ids, do: %{id: id} |> UniqueJob.new() |> Oban.insert!()
+          Enum.each(ids, &enqueue/1)
+        end
+
+        defp enqueue(id), do: Oban.insert(UniqueJob.new(%{id: id}))
       end
       """
       |> to_source_file()
       |> run_check(AshActionInLoop)
-      |> assert_issue(fn issue ->
-        assert issue.message =~ "does not check on Oban's Basic engine"
+      |> refute_issues()
+    end
+
+    test "flags one insert per job for a worker without unique" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.{DefaultArgJob, EmailJob}
+
+        def run(ids) do
+          Enum.each(ids, &Oban.insert(EmailJob.new(%{id: &1})))
+          Enum.each(ids, &Oban.insert(DefaultArgJob.new(%{id: &1})))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issues(fn issues ->
+        assert length(issues) == 2
+        assert Enum.all?(issues, &(&1.message =~ "`Oban.insert_all/2`"))
       end)
     end
 

@@ -254,6 +254,7 @@ defmodule SephiaCredo.Fixtures.UniqueJob do
   @compile {:no_warn_undefined, [Oban]}
 
   def __opts__, do: [queue: :default, unique: [period: 60]]
+  def new(args), do: args
   def perform(_job), do: :ok
   def enqueue(args), do: Oban.insert(args)
 end

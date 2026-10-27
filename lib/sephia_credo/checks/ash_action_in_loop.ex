@@ -33,9 +33,14 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
       attribute, `Enum.group_by/2` or `Enum.chunk_every/2`, and one bulk call
       per chunk, are not reported, nor is a `for` whose body defines tests or
       functions: it runs once, at compile time, and the tests and functions it
-      defines are checked like any other. Run Credo after `mix compile`. `Ash.load`
-      and `Repo.preload` directly in a loop are left to
+      defines are checked like any other. Run Credo after `mix compile`.
+      `Ash.load` and `Repo.preload` directly in a loop are left to
       `SephiaCredo.Checks.PreloadInLoop`.
+
+      An insert per job is left alone when the worker sets `unique`, whether
+      the loop calls `Oban.insert(Worker.new(args))` or a worker function that
+      inserts. `Oban.insert_all/2` does not check uniqueness on Oban's Basic
+      engine, so for such a worker one insert per job is the correct form.
 
       What the check cannot see:
 
@@ -100,7 +105,7 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
       direct = region |> AshCall.calls_in(module, aliases) |> Enum.reject(&preload?/1)
       direct ++ through_locals(region, defs, index)
     end)
-    |> Enum.reject(&(&1.batched? or &1.element_query?))
+    |> Enum.reject(&(&1.batched? or &1.element_query? or &1.kind == :unique_job))
   end
 
   defp statements({:__block__, _, statements}), do: statements
@@ -301,11 +306,6 @@ defmodule SephiaCredo.Checks.AshActionInLoop do
 
   defp advice(:destroy), do: "Destroy them in one call with `Ash.bulk_destroy/4`."
   defp advice(:job), do: "Insert the jobs in one call with `Oban.insert_all/2`."
-
-  defp advice(:unique_job),
-    do:
-      "The worker sets `unique`, which `Oban.insert_all/2` does not check on Oban's Basic " <>
-        "engine, so drop duplicate args before inserting them in one call, or keep one insert per job."
 
   defp advice(:sql),
     do:

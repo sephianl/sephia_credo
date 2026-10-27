@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `AshActionInLoop` no longer reports a call inside a `for` whose body defines tests or functions, such as `for role <- actor_roles() -- @writers do test "rejects #{role}" ... end`. The comprehension runs once at compile time, and each test it defines runs its body once; only a generator over a module attribute or literal was exempt before. A loop inside a generated test or function is still reported. `PreloadInLoop` and `EnumAtInLoop` share the loop detection and skip such comprehensions too.
+- `AshActionInLoop` no longer reports one `Oban.insert` per job for a worker that sets `unique`, whether the loop calls `Oban.insert(Worker.new(args))` or a function the compiled module shows inserting, such as `Worker.enqueue/1`. `Oban.insert_all/2` does not check uniqueness on Oban's Basic engine, so one insert per job is the correct form there; the check used to report it and then say so. A loop inserting jobs for a worker without `unique` is still reported, with the `Oban.insert_all/2` advice.
 
 ## [0.10.2] - 2026-10-27
 
