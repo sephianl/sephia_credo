@@ -11,6 +11,9 @@ defmodule SephiaCredo.Loop do
   @doc """
   Every region of `ast` that runs once per element: the lambdas handed to an
   iterating call, and a comprehension's body and filters but not its generators.
+  A comprehension whose body defines functions or tests (`def`, `test`,
+  `describe`, …) runs at compile time, so it is not a loop; the bodies it
+  defines are searched like any other code.
 
   Nested loops nest their regions, so callers that report per call site should
   deduplicate.
@@ -27,7 +30,9 @@ defmodule SephiaCredo.Loop do
             else: {node, acc}
 
         {:for, _, args} = node, acc when is_list(args) ->
-          {node, for_regions(args) ++ acc}
+          if defines_code?(args),
+            do: {node, acc},
+            else: {node, for_regions(args) ++ acc}
 
         node, acc ->
           {node, acc}
@@ -57,7 +62,7 @@ defmodule SephiaCredo.Loop do
             else: {node, acc}
 
         {:for, _, args} = node, acc when is_list(args) ->
-          if Enum.all?(args, &fixed_generator?(&1, fixed_node?)),
+          if defines_code?(args) or Enum.all?(args, &fixed_generator?(&1, fixed_node?)),
             do: {node, acc},
             else: {node, for_regions(args) ++ acc}
 
@@ -151,6 +156,33 @@ defmodule SephiaCredo.Loop do
 
     body ++ Enum.reject(clauses, &generator?/1)
   end
+
+  @definitions [:def, :defp, :defmacro, :defmacrop, :test, :describe, :property]
+
+  # `for role <- roles do test "rejects #{role}" do ... end end` defines one
+  # test per role when the module compiles; each test runs its body once.
+  defp defines_code?(args) do
+    case List.last(args) do
+      kw when is_list(kw) ->
+        kw |> Keyword.get(:do) |> body_statements() |> Enum.any?(&definition?/1)
+
+      _other ->
+        false
+    end
+  end
+
+  defp body_statements({:__block__, _, statements}), do: statements
+  defp body_statements(statement), do: [statement]
+
+  # A definition has a `do` body; `test(label)` is a call to a local function.
+  defp definition?({name, _, [_ | _] = args}) when name in @definitions do
+    case List.last(args) do
+      [{:do, _} | _] -> true
+      _other -> false
+    end
+  end
+
+  defp definition?(_statement), do: false
 
   defp generator?({:<-, _, _}), do: true
   defp generator?(_node), do: false

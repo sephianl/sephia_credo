@@ -161,12 +161,32 @@ defmodule SephiaCredo.AshCall do
   def remote_call({{:., _, [mod, fun]}, meta, args}, module, aliases)
       when is_atom(fun) and is_list(args) do
     case classify(expand(mod, module, aliases), mod, {fun, length(args)}, meta, args) do
-      %Call{} = call -> %{call | element_query?: element_query?(args)}
-      nil -> nil
+      %Call{} = call ->
+        %{call | element_query?: element_query?(args), kind: kind(call, args, module, aliases)}
+
+      nil ->
+        nil
     end
   end
 
   def remote_call(_node, _module, _aliases), do: nil
+
+  # `Oban.insert(Worker.new(args))`: the job is the worker's, so it is unique
+  # when the worker sets `unique`.
+  defp kind(%Call{kind: :job}, args, module, aliases) do
+    if Enum.any?(args, &unique_job_built?(&1, module, aliases)), do: :unique_job, else: :job
+  end
+
+  defp kind(%Call{kind: kind}, _args, _module, _aliases), do: kind
+
+  defp unique_job_built?({{:., _, [mod, :new]}, _, _args}, module, aliases) do
+    case expand(mod, module, aliases) do
+      [] -> false
+      segments -> unique_worker?(Module.concat(segments))
+    end
+  end
+
+  defp unique_job_built?(_arg, _module, _aliases), do: false
 
   # A load with `lazy?: true` only queries for what is not loaded yet.
   defp classify([:Ash], _mod, {fun, _arity}, meta, args)
@@ -261,7 +281,8 @@ defmodule SephiaCredo.AshCall do
   `:job` when `fun/arity` on `module` inserts an Oban job, read from the compiled
   module: a function that calls `Oban.insert/2`, `Oban.insert!/2` or
   `Oban.insert_all/2`, directly or through its own module's functions, the way
-  a worker's `enqueue/1` wraps its insert.
+  a worker's `enqueue/1` wraps its insert. `:unique_job` instead when `module`
+  is a worker that sets `unique`.
   """
   def job_kind(module, fun, arity) do
     with {:ok, definitions} <- compiled_definitions(module),
@@ -275,7 +296,7 @@ defmodule SephiaCredo.AshCall do
   # `use Oban.Worker` generates `__opts__/0`; a module that inserts jobs may
   # define its own returning anything.
   defp unique_worker?(module) do
-    function_exported?(module, :__opts__, 0) and
+    Code.ensure_loaded?(module) and function_exported?(module, :__opts__, 0) and
       case module.__opts__() do
         opts when is_list(opts) -> Keyword.keyword?(opts) and Keyword.has_key?(opts, :unique)
         _opts -> false

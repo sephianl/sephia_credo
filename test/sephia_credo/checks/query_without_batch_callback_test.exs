@@ -205,6 +205,90 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallbackTest do
       |> refute_issues()
     end
 
+    test "ignores a change whose transaction hooks do per-record work, even with an action hook that writes" do
+      """
+      defmodule ReorderStops do
+        use Ash.Resource.Change
+
+        alias Ash.Changeset
+
+        @impl true
+        def change(changeset, _opts, context) do
+          changeset
+          |> Changeset.before_transaction(&plan_chosen_stop(&1, context))
+          |> Changeset.after_action(&apply_chosen_stop(&1, &2, context))
+          |> Changeset.after_transaction(&recalculate(&1, &2, context))
+        end
+
+        defp plan_chosen_stop(changeset, context) do
+          {:ok, route} = Ash.load(changeset.data, [:stops], actor: context.actor)
+          Changeset.put_context(changeset, :plan, route.stops)
+        end
+
+        defp apply_chosen_stop(changeset, route, _context), do: Route.update(route, %{stops: changeset.context.plan})
+
+        defp recalculate(_changeset, result, _context), do: result
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+
+    test "ignores a query reached only through transaction hooks" do
+      """
+      defmodule CreateReorderedStopsConversation do
+        use Ash.Resource.Change
+
+        @impl true
+        def change(changeset, _opts, context) do
+          changeset
+          |> Ash.Changeset.before_transaction(&remember_metrics/1)
+          |> Ash.Changeset.after_transaction(fn _changeset, result -> post(result, context) end)
+        end
+
+        defp remember_metrics(changeset) do
+          {:ok, route} = Ash.load(changeset.data, [:distance_m], authorize?: false)
+          Ash.Changeset.put_context(changeset, :before, route.distance_m)
+        end
+
+        defp post({:ok, route} = result, context) do
+          {:ok, _message} = Ash.create(Message, %{route_id: route.id}, actor: context.actor)
+          result
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> refute_issues()
+    end
+
+    test "still flags an action hook's query when the transaction hook does no work" do
+      """
+      defmodule LogsAfterCommit do
+        use Ash.Resource.Change
+
+        require Logger
+
+        @impl true
+        def change(changeset, _opts, context) do
+          changeset
+          |> Ash.Changeset.after_action(fn _changeset, record ->
+            {:ok, _event} = Ash.create(Event, %{record_id: record.id}, actor: context.actor)
+            {:ok, record}
+          end)
+          |> Ash.Changeset.after_transaction(fn _changeset, result ->
+            Logger.info("done")
+            result
+          end)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(QueryWithoutBatchCallback)
+      |> assert_issue(fn issue -> assert issue.message =~ "`change/3` reaches `Ash.create`" end)
+    end
+
     test "flags a query directly in change/3" do
       """
       defmodule EnrichStopId do

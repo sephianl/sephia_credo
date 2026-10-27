@@ -390,18 +390,42 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       |> assert_issue(fn issue -> assert issue.message =~ "Oban.insert_all" end)
     end
 
-    test "warns that insert_all skips a unique worker's check" do
+    test "ignores one insert per job for a worker that sets unique" do
       """
       defmodule Sample do
         alias SephiaCredo.Fixtures.UniqueJob
 
-        def run(ids), do: Enum.each(ids, &UniqueJob.enqueue(%{id: &1}))
+        def run(ids) do
+          Enum.each(ids, &UniqueJob.enqueue(%{id: &1}))
+          Enum.each(ids, &Oban.insert(UniqueJob.new(%{id: &1})))
+          for id <- ids, do: %{id: id} |> UniqueJob.new() |> Oban.insert!()
+          Enum.each(ids, &enqueue/1)
+        end
+
+        defp enqueue(id), do: Oban.insert(UniqueJob.new(%{id: id}))
       end
       """
       |> to_source_file()
       |> run_check(AshActionInLoop)
-      |> assert_issue(fn issue ->
-        assert issue.message =~ "does not check on Oban's Basic engine"
+      |> refute_issues()
+    end
+
+    test "flags one insert per job for a worker without unique" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.{DefaultArgJob, EmailJob}
+
+        def run(ids) do
+          Enum.each(ids, &Oban.insert(EmailJob.new(%{id: &1})))
+          Enum.each(ids, &Oban.insert(DefaultArgJob.new(%{id: &1})))
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issues(fn issues ->
+        assert length(issues) == 2
+        assert Enum.all?(issues, &(&1.message =~ "`Oban.insert_all/2`"))
       end)
     end
 
@@ -586,6 +610,90 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
         def run(groups) do
           Enum.each(groups, fn group -> Enum.each(group, &Ash.destroy!/1) end)
         end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+  end
+
+  describe "comprehensions that define code" do
+    test "ignores a comprehension that generates a test per element" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        alias SephiaCredo.Fixtures.Label
+
+        @writers [:admin]
+
+        for role <- actor_roles() -- @writers do
+          @tag role: role
+          test "rejects \#{role}", %{label: label} do
+            actor = create_actor(unquote(role))
+            assert {:error, _} = Label.set_zone(label, nil, actor: actor)
+          end
+        end
+
+        describe "per role" do
+          for role <- actor_roles() do
+            test "reads as \#{role}", %{label: label} do
+              assert {:ok, _} = Label.get_by_code(label.code, actor: unquote(role))
+            end
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores a comprehension that generates a function per element" do
+      """
+      defmodule Sample do
+        for table <- tables() do
+          def unquote(:"count_\#{table}")(), do: Repo.aggregate(unquote(table), :count)
+        end
+      end
+      """
+      |> to_source_file()
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a loop inside a generated test" do
+      """
+      defmodule SampleTest do
+        use ExUnit.Case
+
+        alias SephiaCredo.Fixtures.Label
+
+        for role <- actor_roles() do
+          test "moves every label as \#{role}", %{labels: labels} do
+            Enum.each(labels, &Label.set_zone(&1, nil, actor: unquote(role)))
+          end
+        end
+      end
+      """
+      |> to_source_file("sample_test.exs")
+      |> run_check(AshActionInLoop)
+      |> assert_issue(fn issue -> assert issue.trigger == "Label.set_zone" end)
+    end
+
+    test "flags a comprehension calling a function that shares a definition's name" do
+      """
+      defmodule Sample do
+        alias SephiaCredo.Fixtures.Label
+
+        def run(labels, actor) do
+          for label <- labels do
+            test(label, actor)
+          end
+        end
+
+        defp test(label, actor), do: Label.set_zone(label, nil, actor: actor)
       end
       """
       |> to_source_file()

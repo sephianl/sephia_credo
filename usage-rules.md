@@ -417,12 +417,13 @@ batching them:
   module's own functions; the message names the call and the line it is reached from. Use the
   batched form it names: one read filtering `id in ^ids` then a map lookup, `Ash.bulk_create/4`,
   `Ash.bulk_update/4` (same input for every record) or `Ash.update_many/4` (each its own),
-  `Ash.bulk_destroy/4`, `Oban.insert_all/2`. When the worker sets `unique`, `insert_all` on Oban's
-  Basic engine skips that check: drop duplicate args first or keep the inserts.
+  `Ash.bulk_destroy/4`, `Oban.insert_all/2`. One insert per job is not reported for a worker that
+  sets `unique`, since `insert_all` on Oban's Basic engine skips that check.
 - **`QueryWithoutBatchCallback`** — a validation, change or notifier that queries per record in a
   bulk action. Add `batch_validate/3` or `batch_change/3` doing the query once for the batch; move
-  hook work to `after_batch/3`; give a notifier a `load/2`. A change only single-record actions use
-  costs nothing yet, but say so when silencing it.
+  action hook work to `after_batch/3`; give a notifier a `load/2`. Transaction hooks have no batch
+  form, so a change whose transaction hook does work is not reported. A change only single-record
+  actions use costs nothing yet, but say so when silencing it.
 - **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so remove
   `require_atomic? false` and run the action's tests. If the message names a change whose hook the
   atomic path would skip, give that change the hook in `atomic/3` (or `after_batch/3`) first —
