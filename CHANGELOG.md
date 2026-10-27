@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-10-27
+
+### Changed
+
+- `AshActionInLoop`, `PreloadInLoop` and `EnumAtInLoop` no longer check test code: `*_test.exs` files, and anything under `test/` that is not under `lib/`, such as `test/support`. What they report costs per row, and a test's loop runs over a handful of fixture rows. In Zelo's tests they reported fixtures created or read one at a time, such as an `OrderDelegation.create` per order in a delegation test and an insertion-solver test reading its routes one by one; batching those saves nothing and makes the setup read less like the code it exercises. `include_tests: true` checks test code again. `AppendInLoop` still checks tests: prepending and reversing is the idiom whatever the list's length, so its fix costs a test nothing.
+
 ## [0.10.3] - 2026-10-27
 
 ### Fixed

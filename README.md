@@ -205,6 +205,8 @@ A non-negative integer-literal index is not flagged: `Enum.at(list, 3)` takes at
 
 Known limitation: the check cannot know how large a collection is, so `Enum.at` over a three-element list inside a loop is reported the same as a walk over a large matrix. Both are O(n²); only one is worth your time.
 
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test walks a fixture of a few rows, where the quadratic cost never shows. `include_tests: true` checks it too.
+
 ### KeywordBagParameter
 
 A parameter the body only reaches into with `Keyword.get/fetch/fetch!/take/has_key?` is a parameter list wearing a disguise — it hides the real signature from the caller, from the compiler, and from pattern matching. The check reports the keys it found, so the message names the signature to write:
@@ -242,6 +244,8 @@ Only the unambiguous shape is reported: one clause, no guard on the head, and th
 `Repo.preload` or `Ash.load` inside `Enum.*`/`Stream.*` iteration, `Task.async_stream`, or a `for` comprehension runs one query per element — the textbook N+1. Load the collection in one call instead: `Repo.preload(users, :posts)`, `Ash.load(records, :items)`; both accept a list and batch the queries.
 
 Only the parts of a loop that run per element are examined — the lambda handed to an iterating call, and a comprehension's body and filters. The collection being iterated is evaluated once, so the batched form this check asks for (`Enum.map(Repo.preload(users, :posts), &...)`) is not itself reported.
+
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test's loop runs over a handful of fixture rows, so a load per element costs nothing worth saving. `include_tests: true` checks it too.
 
 ### ProcessSleepInTests
 
@@ -422,6 +426,8 @@ A call counts as a database call only when it certainly is one: the `Ash` read a
 ### AshActionInLoop
 
 `AshActionInLoop` follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`), nor a `for` whose body defines tests or functions, which runs at compile time (the tests and functions it defines are checked like any other). The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2`, or one SQL statement over an array. One insert per job is left alone for a worker that sets `unique`, since the Basic engine does not check uniqueness in `insert_all`.
+
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test's loop runs over a handful of fixture rows, so creating them one by one costs nothing worth saving, and a bulk call in its place makes the setup read less like the code it exercises. `include_tests: true` checks it too.
 
 ### DeepLoad
 

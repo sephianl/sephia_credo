@@ -646,7 +646,7 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       end
       """
       |> to_source_file("sample_test.exs")
-      |> run_check(AshActionInLoop)
+      |> run_check(AshActionInLoop, include_tests: true)
       |> refute_issues()
     end
 
@@ -678,7 +678,7 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       end
       """
       |> to_source_file("sample_test.exs")
-      |> run_check(AshActionInLoop)
+      |> run_check(AshActionInLoop, include_tests: true)
       |> assert_issue(fn issue -> assert issue.trigger == "Label.set_zone" end)
     end
 
@@ -698,6 +698,47 @@ defmodule SephiaCredo.Checks.AshActionInLoopTest do
       """
       |> to_source_file()
       |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+  end
+
+  describe "test code" do
+    @fixture_loop """
+    defmodule SampleTest do
+      alias SephiaCredo.Fixtures.Label
+
+      setup %{labels: labels} do
+        Enum.each(labels, &Label.set_zone(&1, nil))
+        :ok
+      end
+    end
+    """
+
+    test "ignores a test file" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores test support code" do
+      @fixture_loop
+      |> to_source_file("test/support/factory.ex")
+      |> run_check(AshActionInLoop)
+      |> refute_issues()
+    end
+
+    test "flags the same loop in lib" do
+      @fixture_loop
+      |> to_source_file("lib/my_app/sample.ex")
+      |> run_check(AshActionInLoop)
+      |> assert_issue()
+    end
+
+    test "flags a test file with include_tests" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(AshActionInLoop, include_tests: true)
       |> assert_issue()
     end
   end

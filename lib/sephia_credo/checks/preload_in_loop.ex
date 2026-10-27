@@ -15,16 +15,30 @@ defmodule SephiaCredo.Checks.PreloadInLoop do
 
       rather than iterating and loading element-by-element. Both functions
       accept a list and batch the underlying queries.
-      """
-    ]
+
+      Test code is left alone: `*_test.exs` files and anything under `test/`
+      that is not under `lib/`, such as `test/support`. A test's loop runs over
+      a handful of fixture rows, so a load per element costs nothing worth
+      saving. `include_tests: true` checks test code too.
+      """,
+      params: [
+        include_tests: "Check test files and test support code too."
+      ]
+    ],
+    param_defaults: [include_tests: false]
+
+  alias SephiaCredo.TestFile
 
   @impl true
   def run(source_file, params \\ []) do
     issue_meta = IssueMeta.for(source_file, params)
 
-    case Credo.Code.ast(source_file) do
-      {:ok, ast} -> find_issues(ast, issue_meta)
-      {:error, _} -> []
+    with true <-
+           Params.get(params, :include_tests, __MODULE__) or not TestFile.test_code?(source_file),
+         {:ok, ast} <- Credo.Code.ast(source_file) do
+      find_issues(ast, issue_meta)
+    else
+      _skipped_or_unparsable -> []
     end
   end
 

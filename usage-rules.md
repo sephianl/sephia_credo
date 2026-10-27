@@ -131,7 +131,8 @@ reported: reaching `-1` walks to the end. Hoist it — the enumerable does not c
 
 **Before acting, check how big the collection is.** The check cannot see that, so `Enum.at` over a
 three-element config list is reported exactly like a walk over a large matrix. Both are O(n²); only
-one is worth changing. If it is small and fixed, silence the line rather than restructuring.
+one is worth changing. If it is small and fixed, silence the line rather than restructuring. Test
+code (`*_test.exs`, `test/support`) is not checked unless `include_tests: true` is set.
 
 ### `KeywordBagParameter` (refactor)
 
@@ -192,7 +193,8 @@ Flags `Repo.preload` or `Ash.load` inside `Enum.*`/`Stream.*` iteration, `Task.a
 Fix by loading the collection once — `Repo.preload(users, :posts)` or `Ash.load(records, :items)`;
 both take a list and batch the queries. Only per-element regions are examined, so the batched call
 that *feeds* a loop is already correct and is not what the report is pointing at — read the line
-number before rewriting anything.
+number before rewriting anything. Test code (`*_test.exs`, `test/support`) is not checked unless
+`include_tests: true` is set: a load per fixture row costs nothing worth saving.
 
 ### `ProcessSleepInTests` (refactor, test files)
 
@@ -418,7 +420,9 @@ batching them:
   batched form it names: one read filtering `id in ^ids` then a map lookup, `Ash.bulk_create/4`,
   `Ash.bulk_update/4` (same input for every record) or `Ash.update_many/4` (each its own),
   `Ash.bulk_destroy/4`, `Oban.insert_all/2`. One insert per job is not reported for a worker that
-  sets `unique`, since `insert_all` on Oban's Basic engine skips that check.
+  sets `unique`, since `insert_all` on Oban's Basic engine skips that check. Test code
+  (`*_test.exs`, `test/support`) is not checked unless `include_tests: true` is set: creating
+  fixtures one by one costs nothing worth saving, so do not batch a test's setup to please it.
 - **`QueryWithoutBatchCallback`** — a validation, change or notifier that queries per record in a
   bulk action. Add `batch_validate/3` or `batch_change/3` doing the query once for the batch; move
   action hook work to `after_batch/3`; give a notifier a `load/2`. Transaction hooks have no batch
