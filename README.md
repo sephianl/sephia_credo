@@ -118,7 +118,7 @@ Checks marked *opt-in* are not in the generated config. Each has its own section
 | `ShadowedAlias` | Warning | Flags two aliases in one scope sharing a final segment — every call resolves to the second and the first is unreachable, with no compiler warning |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
-| `TestLayout` | Design *(opt-in)* | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/` |
+| `TestLayout` | Design *(opt-in)* | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/`, and any other test module whose name does not spell its path |
 | `TrivialWrapperFunction` | Refactor | Flags a single-clause `defp` that only forwards its arguments to another module |
 | `UndefinedDocReference` | Warning | Flags a backticked module reference — in a doc, a `description:` or a `raise` message — that names no module in the project or its dependencies |
 | `UniqueModuleName` | Design *(opt-in)* | Flags two modules under `included_paths` ending in the same name — their aliases silently shadow each other |
@@ -411,7 +411,7 @@ A domain module may sit in its own folder, as `MyApp.Geography` does, and `resou
 
 ### TestLayout
 
-A `<Module>Test` mirrors `<Module>`'s file, so `lib/my_app/route/changes/set_current_stop.ex` is tested in `test/my_app/route/changes/set_current_stop_test.exs`. Tests named after anything else, such as a feature or a flow, are not checked, and a module's tests may be split over `<module>_<part>_test.exs` files beside the main one. `lib_paths` (default `["lib"]`) lists the folders whose modules tests are matched against. The fix is a `git mv`, in the same PR as the module's.
+A `<Module>Test` mirrors `<Module>`'s file, so `lib/my_app/route/changes/set_current_stop.ex` is tested in `test/my_app/route/changes/set_current_stop_test.exs`. A module's tests may be split over `<module>_<part>_test.exs` files beside the main one. A test named after anything else, such as a feature or a flow, is named after its own path, as `ModuleLayout` holds `lib/` modules to theirs: `test/my_app/planner/route_lifecycle_test.exs` defines `MyApp.Planner.RouteLifecycleTest`. So a test still named after a module that has since moved is reported rather than skipped. `resources` is ignored on both sides, and `test/support/` is skipped. `lib_paths` (default `["lib"]`) lists the folders whose modules tests are matched against. The fix is a `git mv`, in the same PR as the module's.
 
 ### UniqueModuleName
 

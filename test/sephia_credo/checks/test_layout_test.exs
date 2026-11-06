@@ -40,12 +40,13 @@ defmodule SephiaCredo.Checks.TestLayoutTest do
   end
 
   test "sees modules added since an earlier run", %{tmp_dir: tmp_dir} do
-    source_file = source_file("MyApp.Planner.DepotTest", "test/my_app/depot_test.exs", tmp_dir)
+    source_file =
+      source_file("MyApp.Planner.DepotTest", "test/my_app/planner/depot_test.exs", tmp_dir)
 
     refute_issues(run_check(source_file, TestLayout))
 
     File.write!(
-      Path.join(tmp_dir, "lib/my_app/planner/depot.ex"),
+      Path.join(tmp_dir, "lib/my_app/planner/resources/depot.ex"),
       "defmodule MyApp.Planner.Depot do\nend\n"
     )
 
@@ -63,15 +64,44 @@ defmodule SephiaCredo.Checks.TestLayoutTest do
     end)
   end
 
-  test "ignores tests not named after a module in lib", %{tmp_dir: tmp_dir} do
+  test "accepts a test not named after a module in lib that is named after its path", %{
+    tmp_dir: tmp_dir
+  } do
     "MyApp.Planner.RouteLifecycleTest"
     |> check("test/my_app/planner/route_lifecycle_test.exs", tmp_dir)
     |> refute_issues()
   end
 
+  test "accepts a resources folder the name leaves out", %{tmp_dir: tmp_dir} do
+    "MyApp.Planner.RouteLifecycleTest"
+    |> check("test/my_app/planner/resources/route_lifecycle_test.exs", tmp_dir)
+    |> refute_issues()
+  end
+
+  test "flags a test still named after a module that moved away", %{tmp_dir: tmp_dir} do
+    "MyApp.Planner.Mutations.PlanBreaksTest"
+    |> check("test/my_app/solver/plan_breaks_test.exs", tmp_dir)
+    |> assert_issue(fn issue ->
+      assert issue.trigger == "MyApp.Planner.Mutations.PlanBreaksTest"
+      assert issue.message =~ "MyApp.Solver.PlanBreaksTest"
+    end)
+  end
+
+  test "flags a test module without the Test suffix", %{tmp_dir: tmp_dir} do
+    "MyApp.Solver.OutputProperties"
+    |> check("test/my_app/solver/output_properties_test.exs", tmp_dir)
+    |> assert_issue()
+  end
+
   test "ignores files that are not tests", %{tmp_dir: tmp_dir} do
     "MyApp.Planner.Route.Changes.SetCurrentStopTest"
     |> check("test/support/set_current_stop_test.ex", tmp_dir)
+    |> refute_issues()
+  end
+
+  test "ignores helpers under test/support", %{tmp_dir: tmp_dir} do
+    "MyApp.DataCase"
+    |> check("test/support/data_case_test.exs", tmp_dir)
     |> refute_issues()
   end
 end
