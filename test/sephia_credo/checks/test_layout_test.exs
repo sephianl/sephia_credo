@@ -78,6 +78,23 @@ defmodule SephiaCredo.Checks.TestLayoutTest do
     |> refute_issues()
   end
 
+  test "accepts a folder named in name_free_folders that the name leaves out", %{
+    tmp_dir: tmp_dir
+  } do
+    "defmodule MyAppWeb.Map.DeleteAllTest do\n  use ExUnit.Case\nend\n"
+    |> to_source_file(Path.join(tmp_dir, "test/my_app_web/live/map/delete_all_test.exs"))
+    |> run_check(TestLayout, name_free_folders: ["resources", "live"])
+    |> refute_issues()
+  end
+
+  test "flags a folder left in the path when name_free_folders does not name it", %{
+    tmp_dir: tmp_dir
+  } do
+    "MyAppWeb.Map.DeleteAllTest"
+    |> check("test/my_app_web/live/map/delete_all_test.exs", tmp_dir)
+    |> assert_issue(fn issue -> assert issue.message =~ "MyAppWeb.Live.Map.DeleteAllTest" end)
+  end
+
   test "flags a test still named after a module that moved away", %{tmp_dir: tmp_dir} do
     "MyApp.Planner.Mutations.PlanBreaksTest"
     |> check("test/my_app/solver/plan_breaks_test.exs", tmp_dir)

@@ -2,7 +2,7 @@ defmodule SephiaCredo.Checks.TestLayout do
   use Credo.Check,
     base_priority: :high,
     category: :design,
-    param_defaults: [lib_paths: ["lib"]],
+    param_defaults: [lib_paths: ["lib"], name_free_folders: ["resources"]],
     explanations: [
       check: """
       A test for a module mirrors that module's file:
@@ -20,10 +20,15 @@ defmodule SephiaCredo.Checks.TestLayout do
           test/my_app/planner/route_lifecycle_test.exs   MyApp.Planner.RouteLifecycleTest
 
       So a test still named after a module that has since moved or been renamed is
-      reported rather than skipped. `resources` is a folder, never part of a name, and is
-      ignored on both sides. Files under `test/support/` hold helpers and are skipped.
+      reported rather than skipped. Folders in `name_free_folders` (by default `resources`)
+      are never part of a name and are left out of the path. Files under `test/support/`
+      hold helpers and are skipped.
       """,
-      params: [lib_paths: "Folders whose modules tests are matched against."]
+      params: [
+        lib_paths: "Folders whose modules tests are matched against.",
+        name_free_folders:
+          "Folders that never appear in a module name, such as a Phoenix app's `live`, left out of a test's path before it is compared with the name."
+      ]
     ]
 
   alias SephiaCredo.ModulePath
@@ -39,12 +44,16 @@ defmodule SephiaCredo.Checks.TestLayout do
   def run(%Credo.SourceFile{filename: filename} = source_file, params) do
     lib_roots = lib_roots(filename, Params.get(params, :lib_paths, __MODULE__))
 
+    name_free_folders = Params.get(params, :name_free_folders, __MODULE__)
+
     with ["test" | path_segments] <- test_segments(filename),
          {name, line_no} <- test_module(Credo.SourceFile.ast(source_file)) do
+      named_segments = Enum.reject(path_segments, &(&1 in name_free_folders))
+
       lib_roots
       |> module_files(params)
       |> Map.fetch(subject(name))
-      |> issues(name, path_segments, filename, line_no, IssueMeta.for(source_file, params))
+      |> issues(name, named_segments, filename, line_no, IssueMeta.for(source_file, params))
     else
       _ -> []
     end
@@ -121,8 +130,7 @@ defmodule SephiaCredo.Checks.TestLayout do
   end
 
   defp misnamed_issue(issue_meta, name, path_segments, line_no) do
-    named =
-      path_segments |> Enum.reject(&(&1 == "resources")) |> Enum.map_join(".", &Macro.camelize/1)
+    named = Enum.map_join(path_segments, ".", &Macro.camelize/1)
 
     format_issue(issue_meta,
       message:
