@@ -766,6 +766,22 @@ defmodule SephiaCredo.AshCall do
     |> Enum.any?(&match?({:use, _, [{:__aliases__, _, ^segments} | _]}, &1))
   end
 
+  @doc "The line of the first `def` of a `{name, arity}` in a module body."
+  def def_line(body, {name, arity}) do
+    {_ast, line} =
+      Macro.prewalk(body, nil, fn
+        {:def, meta, [head | _]} = node, nil ->
+          if SephiaCredo.Ast.fun_name(head) == name and arity in SephiaCredo.Ast.fun_arities(head),
+            do: {node, meta[:line]},
+            else: {node, nil}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    line
+  end
+
   @doc "How a call reads in a message: the call, and the local function it goes through."
   def describe(%Call{label: label, line: line, via: nil}), do: "`#{label}` (line #{line})"
 

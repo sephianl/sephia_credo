@@ -142,7 +142,7 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
         atomic?: Map.has_key?(defs, {:atomic, 3})
       }
 
-      issue(callback, batch, call, shape, def_line(body, callback), issue_meta)
+      issue(callback, batch, call, shape, AshCall.def_line(body, callback), issue_meta)
     end ++ notifier_issues(module, body, aliases, defs, issue_meta)
   end
 
@@ -150,7 +150,7 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
     with true <- notifier?(body),
          true <- Map.has_key?(defs, {:notify, 1}),
          %AshCall.Call{} = call <- AshCall.costly_functions(body, module, aliases)[{:notify, 1}] do
-      [notifier_issue(call, def_line(body, {:notify, 1}), issue_meta)]
+      [notifier_issue(call, AshCall.def_line(body, {:notify, 1}), issue_meta)]
     else
       _ -> []
     end
@@ -222,21 +222,6 @@ defmodule SephiaCredo.Checks.QueryWithoutBatchCallback do
       end)
 
     found?
-  end
-
-  defp def_line(body, {name, arity}) do
-    {_ast, line} =
-      Macro.prewalk(body, nil, fn
-        {:def, meta, [head | _]} = node, nil ->
-          if SephiaCredo.Ast.fun_name(head) == name and arity in SephiaCredo.Ast.fun_arities(head),
-            do: {node, meta[:line]},
-            else: {node, nil}
-
-        node, acc ->
-          {node, acc}
-      end)
-
-    line
   end
 
   defp issue({name, arity} = callback, batch, call, shape, line, issue_meta) do
