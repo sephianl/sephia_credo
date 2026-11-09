@@ -77,6 +77,7 @@ mix deps.get
           # Query cost: run Credo after `mix compile`.
           # {SephiaCredo.Checks.AshActionInLoop, []},
           # {SephiaCredo.Checks.DeepLoad, max_relationships: 4},
+          # {SephiaCredo.Checks.MissingAtomicCallback, []},
           # {SephiaCredo.Checks.QueryWithoutBatchCallback, []},
           # {SephiaCredo.Checks.RollbackOnSuccess, []},
           # {SephiaCredo.Checks.UnneededRequireAtomicFalse, []}
@@ -106,6 +107,7 @@ Checks marked *opt-in* are not in the generated config. Each has its own section
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
 | `ModuleLayout` | Design *(opt-in)* | Flags a module under `included_paths` whose file path does not spell its name |
+| `MissingAtomicCallback` | Warning *(opt-in)* | Flags a change or validation an update or destroy runs that has no `atomic/3`: make it atomic, or say why it cannot be |
 | `MultiStepMutationWithoutTransaction` | Warning | Flags a function performing 2+ database mutations outside a transaction — a mid-sequence failure leaves partial state |
 | `PatternMatchInFunctionHead` | Refactor | Flags a single-clause function whose whole body is a `case` on one of its own parameters |
 | `PreloadInLoop` | Warning | Flags `Repo.preload` / `Ash.load` inside `Enum.*`, `Stream.*`, `Task.async_stream` or `for` — one query per element (N+1) |
@@ -118,7 +120,7 @@ Checks marked *opt-in* are not in the generated config. Each has its own section
 | `ShadowedAlias` | Warning | Flags two aliases in one scope sharing a final segment — every call resolves to the second and the first is unreachable, with no compiler warning |
 | `StructComparisonOperator` | Warning | Forbids `<`/`>`/`<=`/`>=`/`==`/`!=` on `Date`/`Time`/`DateTime`/`NaiveDateTime`/`Decimal`/`Version` — use `*.compare/2` instead |
 | `SysGetStateWithoutTimeoutInPoll` | Warning *(opt-in)* | Flags `:sys.get_state/1` inside a polling fn without surrounding `try/catch :exit` — flakes under load |
-| `TestLayout` | Design *(opt-in)* | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/` |
+| `TestLayout` | Design *(opt-in)* | Flags a `<Module>Test` whose file does not mirror `<Module>`'s file under `test/`, and any other test module whose name does not spell its path |
 | `TrivialWrapperFunction` | Refactor | Flags a single-clause `defp` that only forwards its arguments to another module |
 | `UndefinedDocReference` | Warning | Flags a backticked module reference — in a doc, a `description:` or a `raise` message — that names no module in the project or its dependencies |
 | `UniqueModuleName` | Design *(opt-in)* | Flags two modules under `included_paths` ending in the same name — their aliases silently shadow each other |
@@ -205,6 +207,8 @@ A non-negative integer-literal index is not flagged: `Enum.at(list, 3)` takes at
 
 Known limitation: the check cannot know how large a collection is, so `Enum.at` over a three-element list inside a loop is reported the same as a walk over a large matrix. Both are O(n²); only one is worth your time.
 
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test walks a fixture of a few rows, where the quadratic cost never shows. `include_tests: true` checks it too.
+
 ### KeywordBagParameter
 
 A parameter the body only reaches into with `Keyword.get/fetch/fetch!/take/has_key?` is a parameter list wearing a disguise — it hides the real signature from the caller, from the compiler, and from pattern matching. The check reports the keys it found, so the message names the signature to write:
@@ -242,6 +246,8 @@ Only the unambiguous shape is reported: one clause, no guard on the head, and th
 `Repo.preload` or `Ash.load` inside `Enum.*`/`Stream.*` iteration, `Task.async_stream`, or a `for` comprehension runs one query per element — the textbook N+1. Load the collection in one call instead: `Repo.preload(users, :posts)`, `Ash.load(records, :items)`; both accept a list and batch the queries.
 
 Only the parts of a loop that run per element are examined — the lambda handed to an iterating call, and a comprehension's body and filters. The collection being iterated is evaluated once, so the batched form this check asks for (`Enum.map(Repo.preload(users, :posts), &...)`) is not itself reported.
+
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test's loop runs over a handful of fixture rows, so a load per element costs nothing worth saving. `include_tests: true` checks it too.
 
 ### ProcessSleepInTests
 
@@ -407,7 +413,7 @@ A domain module may sit in its own folder, as `MyApp.Geography` does, and `resou
 
 ### TestLayout
 
-A `<Module>Test` mirrors `<Module>`'s file, so `lib/my_app/route/changes/set_current_stop.ex` is tested in `test/my_app/route/changes/set_current_stop_test.exs`. Tests named after anything else, such as a feature or a flow, are not checked, and a module's tests may be split over `<module>_<part>_test.exs` files beside the main one. `lib_paths` (default `["lib"]`) lists the folders whose modules tests are matched against. The fix is a `git mv`, in the same PR as the module's.
+A `<Module>Test` mirrors `<Module>`'s file, so `lib/my_app/route/changes/set_current_stop.ex` is tested in `test/my_app/route/changes/set_current_stop_test.exs`. A module's tests may be split over `<module>_<part>_test.exs` files beside the main one. A test named after anything else, such as a feature or a flow, is named after its own path, as `ModuleLayout` holds `lib/` modules to theirs: `test/my_app/planner/route_lifecycle_test.exs` defines `MyApp.Planner.RouteLifecycleTest`. So a test still named after a module that has since moved is reported rather than skipped. `name_free_folders` (default `["resources"]`) lists folders that never appear in a module name, such as a Phoenix app's `live`, and `test/support/` is skipped. `lib_paths` (default `["lib"]`) lists the folders whose modules tests are matched against. The fix is a `git mv`, in the same PR as the module's.
 
 ### UniqueModuleName
 
@@ -417,11 +423,17 @@ No two modules under `included_paths` end in the same name. `alias A.DepotDay` f
 
 Five checks for database work that multiplies with the rows. They report facts the code shows, not style: each names the call, the line it is reached from, and why it runs that often, and suggests the batched form. The four Ash ones read the compiled project, so run Credo after `mix compile`; without a compiled project they see less, never more.
 
+These checks are experimental: what they report, and the parameters they take, may still change between patch releases as they meet more codebases. Pin an exact version if a change in their reports would block your CI.
+
+In `credo diff` both passes read the same compiled project, the branch's, since the merge base is only checked out, never compiled. A report that depends on another module — a change's `atomic/3`, a bulk call elsewhere — therefore appears in both passes and counts as kept: diff mode never calls it new on a file the branch did not touch, and never blames the branch that caused it either. The checks give the same answer however busy the machine is, so the two passes agree.
+
 A call counts as a database call only when it certainly is one: the `Ash` read and write API, an Ecto repo, `Oban.insert/2` or a function the compiled module shows calling it, and a code interface of a create, read, update or destroy action on a resource with a database data layer. Generic actions, calculation interfaces, `lazy?: true` loads and resources kept in memory may never query, so they are not counted.
 
 ### AshActionInLoop
 
-`AshActionInLoop` follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`), nor a `for` whose body defines tests or functions, which runs at compile time (the tests and functions it defines are checked like any other). The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2`, or one SQL statement over an array. One insert per job is left alone for a worker that sets `unique`, since the Basic engine does not check uniqueness in `insert_all`.
+`AshActionInLoop` follows the module's own functions, and only the clauses a literal argument can match (`toggle(socket, id, true)` never runs the `false` clause). It does not report loops of a fixed length — over a list literal (not `[head | tail]`), a module attribute, a range between constants, `Map.values/1` of one, a variable its function binds only to one, or a zero-arity function the compiled module shows returning one — nor one bulk call per `Enum.group_by/2` group or `Enum.chunk_every/2` chunk, nor an element that carries its own query (`Ash.count(query_fun.())`), nor a `for` whose body defines tests or functions, which runs at compile time (the tests and functions it defines are checked like any other), nor a call in `Enum.reduce`, `reduce_while`, `map_reduce` or `Stream.transform` that takes the accumulator and whose result becomes the next one, which cannot run before the previous element's call returned: `Enum.map_reduce(routes, start, fn route, start -> result = recalc(route, start); {result, ended_at(result)} end)`. A call the accumulator only collects, like `create(item)` in `fn item, {:ok, acc} -> ... end`, is still reported. The advice depends on the call: one read filtering `id in ^ids`, `Ash.bulk_create/4`, `Ash.bulk_update/4` when every record gets the same input or `Ash.update_many/4` when each gets its own, `Ash.bulk_destroy/4`, `Oban.insert_all/2`, or one SQL statement over an array. One insert per job is left alone for a worker that sets `unique`, since the Basic engine does not check uniqueness in `insert_all`.
+
+Test code is not checked: `*_test.exs` files and anything under `test/` that is not under `lib/`, such as `test/support`. A test's loop runs over a handful of fixture rows, so creating them one by one costs nothing worth saving, and a bulk call in its place makes the setup read less like the code it exercises. `include_tests: true` checks it too.
 
 ### DeepLoad
 
@@ -429,9 +441,17 @@ A call counts as a database call only when it certainly is one: the `Ash` read a
 
 Where the caller needs one value of a relationship (a count, a sum, an existence check), an aggregate or an expression calculation returns it in the main query. Where it needs the related records, keep the load: it is already one query per relationship however many rows there are, and reading them per record instead is the N+1 the load avoids.
 
+### MissingAtomicCallback
+
+A change or validation without `atomic/3` silently decides that every update or destroy running it cannot be atomic. Try to make it atomic first: an expression for a value the database can compute, `{:ok, change(changeset, opts, context)}` for a change that only adds an `after_action` hook reading the updated record, or a failing condition and its error for a validation. Only when it really cannot be, return `{:not_atomic, "the reason"}`, so the next reader knows it was decided. A module the compiled project runs on nothing but creates is not reported, since `atomic/3` is never called for a create.
+
 ### QueryWithoutBatchCallback
 
-`QueryWithoutBatchCallback` reports a `validate/3` or `change/3` (including the hooks it adds) that reaches a database call while the module lacks `batch_validate/3` or `batch_change/3`: Ash then calls it once per record in a bulk action. An action hook's work moves to `after_batch/3`. Transaction hooks have no batch form, since the batch callbacks run inside the transaction, so a change whose transaction hook does work is per record by design and is not reported. When it tells another resource what happened, an `:after_action` signal (`Ash.Signals`) fits: declare it on the action with `emit`, or emit it with `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that is not an attribute. A bulk action emits `:after_action` signals once per batch, and a create, update or destroy listener, or a generic one with `batch?: true`, handles the batch in one call. A notifier's `notify/1` runs once per notification; what it reads belongs in `load/2`, which Ash loads for the whole batch.
+`QueryWithoutBatchCallback` reports a `validate/3` or `change/3` (including the hooks it adds) that reaches a database call while the module lacks `batch_validate/3` or `batch_change/3`: Ash then calls it once per record in a bulk action.
+
+It reports a change or validation only when a bulk action can run it, read from the compiled project. A resource's global `changes` and `validations` run in every action of their types, bulk ones included, so those always count. One listed on an action counts when the action can run in bulk: it is a primary action (`manage_relationship`, `cascade_destroy`, `cascade_update` and AshArchival run those in bulk by default), an `Ash.Signals` listener, named in an `Ash.bulk_create/4`, `Ash.bulk_update/4`, `Ash.bulk_destroy/4` or `Ash.update_many/4` call or a `cascade_*`/`manage_relationship` option, or its code interface is called with anything the code does not show to be one record. An action or resource passed as a variable is followed to the atoms it can hold — a private function's callers, a lambda's collection — and matches every one when it cannot be. A value counts as one record when it is a struct, map or id, the record a get or single-record write returned, one element of a collection, or when the caller handles the result as `{:ok, record}`, which a bulk call never returns. So an action a job runs on the one record it loaded, like a custom zone's `:calculate_entry_points`, no longer makes its change a report; it becomes one the day a caller runs that action in bulk. A module no compiled resource uses is reported as before. The project's index is built once per run, about three seconds on a 2900-file project. What it cannot see: an action run in bulk by a dependency other than Ash, through `apply/3`, or by a `manage_relationship` whose options are not written out; AshGraphql and AshJsonApi run their actions on one record per request.
+
+An action hook's work moves to `after_batch/3`. Transaction hooks have no batch form, since the batch callbacks run inside the transaction, so a change whose transaction hook does work is per record by design and is not reported. When it tells another resource what happened, an `:after_action` signal (`Ash.Signals`) fits: declare it on the action with `emit`, or emit it with `Ash.Signals.emit_many/5` from `after_batch/3` when it carries data that is not an attribute. A bulk action emits `:after_action` signals once per batch, and a create, update or destroy listener, or a generic one with `batch?: true`, handles the batch in one call. A notifier's `notify/1` runs once per notification; what it reads belongs in `load/2`, which Ash loads for the whole batch. An insert of a job whose worker sets `unique` does not count, in a hook or in `notify/1`, since `Oban.insert_all/2` does not check uniqueness on the Basic engine; a query after it still does.
 
 ### RollbackOnSuccess
 
@@ -450,18 +470,23 @@ Predict the outcome from what the writes would read: load that state once and co
 
 ### UnneededRequireAtomicFalse
 
-`UnneededRequireAtomicFalse` asks Ash: it builds the action with `Ash.Changeset.fully_atomic_changeset/4`, which runs every change's and validation's `atomic/3` without touching the database. Those callbacks, and the action's default functions, are your code, so each action is built in a process of its own: one that raises, exits or takes more than five seconds leaves the action unreported. When a change adds a hook in `change/3` that its `atomic/3` leaves out, directly or through the module's own functions, the message names it, since removing the option stops that hook from running. An action that un-archives a row on an `AshArchival` resource is not reported: the read an atomic update finds its row through hides archived rows unless it is in `exclude_read_actions`.
+`UnneededRequireAtomicFalse` asks Ash: it builds the action with `Ash.Changeset.fully_atomic_changeset/4`, which runs every change's and validation's `atomic/3` without touching the database. Those callbacks, and the action's default functions, are your code, so each action is built in a process of its own: one that raises, exits, waits five seconds on something other than loading code, or runs away leaves the action unreported. Waiting for the code server does not count, so the answer does not depend on how busy the machine is — which matters in `credo diff`, whose base pass runs first in a colder VM. When a change adds a hook in `change/3` that its `atomic/3` leaves out, directly or through the module's own functions, the message names it, since removing the option stops that hook from running. An action that un-archives a row on an `AshArchival` resource is not reported: the read an atomic update finds its row through hides archived rows unless it is in `exclude_read_actions`.
+
+Building atomically is not behaving the same. On the atomic path Ash calls each change's `atomic/3` instead of `change/3`, and a bulk update never reads the row into `changeset.data`, so a change that reads the record's previous value there — the status an order moves from, say — has to express that read as an expression in `atomic/3`. The message says to check what the changes read from the old record before removing the option.
 
 ### Edge cases
 
-Run against two production Ash codebases (about 630 reports), three reports were wrong, and all three for the same reason: a collection that holds at most one element because of something outside the code, a partial unique index or `top: 1` on an external API. Some ten to fifteen more were right but deliberate: a loop where each step reads what the previous one wrote, locks taken one by one in a fixed order, a per-row fallback after a bulk insert failed. Neither is visible in the code, so the checks cannot tell. Make the single row explicit in the code, or mark a deliberate case with its reason:
+Run against two production Ash codebases (about 630 reports), three reports were wrong, and all three for the same reason: a collection that holds at most one element because of something outside the code, a partial unique index or `top: 1` on an external API. Some ten to fifteen more were right but deliberate: a loop where each step reads what the previous one wrote, locks taken one by one in a fixed order, a per-row fallback after a bulk insert failed. `AshActionInLoop` recognises a step that reads what the previous one wrote when it goes through a reduce's accumulator; the rest is not visible in the code, so the checks cannot tell. Make the single row explicit in the code where you can (match `[row]`, update by query). Where the bound is a domain invariant the code cannot show, name the function in `.credo.exs` with the reason, rather than marking the line with a `# credo:disable` comment:
 
 ```elixir
-# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
-# Each route departs when the previous one ends.
+{SephiaCredo.Checks.AshActionInLoop,
+ allow: [
+   {MyApp.Routes.UnassignDriver, :handle_routes,
+    "A driver overlaps at most one route, and :unassign_driver streams per record anyway"}
+ ]}
 ```
 
-`QueryWithoutBatchCallback` reports a module whatever actions use it: a change only single-record actions use costs nothing extra until one of them runs in bulk. `mix credo explain` lists each check's limits.
+`AshActionInLoop`, `PreloadInLoop` and `QueryWithoutBatchCallback` take `allow`. An entry is `{Module, :function, "reason"}` or `{Module, :function, arity, "reason"}` and exempts every report inside that function — for `QueryWithoutBatchCallback`, the callback the report is on (`:validate`, `:change`, `:notify`). The reason is required, and an entry without one stops the run: the config is where the next reader finds why the loop is fine, and one list is easier to review than comments spread over the code. `mix credo explain` lists each check's limits.
 
 ## Usage rules for AI agents
 

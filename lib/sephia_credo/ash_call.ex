@@ -601,7 +601,10 @@ defmodule SephiaCredo.AshCall do
   Per local function, each clause's head parameters and the first round-trip
   call that clause reaches, directly or through the module's own functions.
   A call with literal arguments only reaches the clauses those literals can
-  match: `toggle(socket, id, true)` never runs the clause for `false`.
+  match: `toggle(socket, id, true)` never runs the clause for `false`. An
+  insert of a job whose worker sets `unique` does not count: one insert per
+  job is the correct form for such a worker, so a query after it is the one
+  that costs.
   """
   def reach_index(body, module, aliases) do
     defs = definitions(body)
@@ -611,7 +614,11 @@ defmodule SephiaCredo.AshCall do
     |> Map.new(fn {key, clauses} ->
       {key,
        Enum.map(clauses, fn clause ->
-         Map.put(clause, :call, clause.body |> calls_in(module, aliases) |> List.first())
+         Map.put(
+           clause,
+           :call,
+           clause.body |> calls_in(module, aliases) |> Enum.find(&(&1.kind != :unique_job))
+         )
        end)}
     end)
     |> reach(defs)
@@ -757,6 +764,22 @@ defmodule SephiaCredo.AshCall do
     body
     |> statements()
     |> Enum.any?(&match?({:use, _, [{:__aliases__, _, ^segments} | _]}, &1))
+  end
+
+  @doc "The line of the first `def` of a `{name, arity}` in a module body."
+  def def_line(body, {name, arity}) do
+    {_ast, line} =
+      Macro.prewalk(body, nil, fn
+        {:def, meta, [head | _]} = node, nil ->
+          if SephiaCredo.Ast.fun_name(head) == name and arity in SephiaCredo.Ast.fun_arities(head),
+            do: {node, meta[:line]},
+            else: {node, nil}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    line
   end
 
   @doc "How a call reads in a message: the call, and the local function it goes through."

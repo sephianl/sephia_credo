@@ -16,20 +16,35 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
             change set_attribute(:zone_id, arg(:zone_id))
           end
 
-      Remove the option. An action whose change cannot run atomically raises
-      when Ash builds it, so the tests say whether it was needed.
+      Removing the option changes what the action's changes see. On the atomic
+      path Ash calls each change's `atomic/3` instead of `change/3`, and the
+      statement updates each row as it stands in the database, which a bulk
+      update never reads into `changeset.data`. A change that reads the
+      record's previous value, such as the status an order moves from, has to
+      express that read in `atomic/3` instead:
+
+          def atomic(_changeset, _opts, _context),
+            do: {:atomic, %{notified_at: expr(if status == :expected, do: now(), else: notified_at)}}
+
+      Check what each change reads from the record before removing the
+      option. An action whose change cannot run atomically raises when Ash
+      builds it, so the tests say whether the option was needed, but not
+      whether a change still behaves the same.
 
       The check asks Ash: it builds the action with
       `Ash.Changeset.fully_atomic_changeset/4` and no input, which runs every
       change's and validation's `atomic/3` (the action's own, global ones and
       ones added by extensions) without touching the database. That runs the
       project's own `atomic/3` callbacks and default functions, each action in
-      a process of its own: one that declines without its input, raises, exits
-      or takes more than five seconds leaves the action unreported. So does a
-      resource with no `domain:` of its own, which Ash cannot build without
-      one. Actions in a `Spark.Dsl.Fragment` are read from the nearest
-      enclosing resource (`User.Actions` from `User`). Run Credo after
-      `mix compile`.
+      a process of its own: one that declines without its input, raises, exits,
+      waits five seconds on something other than loading code, or runs away
+      leaves the action unreported. So does a resource with no `domain:` of
+      its own, which Ash cannot build without one. Time spent waiting for the
+      code server to load modules does not count towards the five seconds, so
+      a busy machine, or the colder base pass of `credo diff`, gives the same
+      answer as an idle one. Actions in a `Spark.Dsl.Fragment` are read from
+      the nearest enclosing resource (`User.Actions` from `User`). Run Credo
+      after `mix compile`.
 
       Building atomically is not the same as behaving the same: a change whose
       `atomic/3` leaves out a hook its `change/3` adds stops running that hook
@@ -51,7 +66,10 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   @compile {:no_warn_undefined,
             [Ash.Resource.Info, Ash.Changeset, Spark, Spark.Dsl, AshArchival.Resource.Info]}
 
-  @build_timeout 5_000
+  @poll_interval 50
+  @max_blocked 5_000
+  @max_reductions 500_000_000
+  @code_loading [:code_server, :code, :erl_prim_loader, :error_handler]
 
   @impl true
   def run(source_file, params \\ []) do
@@ -132,16 +150,54 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   # stopping the Credo run.
   defp builds_atomically?(resource, action) do
     {pid, ref} = spawn_monitor(fn -> exit({:built, atomic_changeset?(resource, action)}) end)
+    await_build(pid, ref, 0)
+  end
 
+  # A wall-clock deadline would make the answer depend on the machine's load:
+  # early in a full run every build queues behind the code server loading
+  # modules, for over ten seconds on a sixteen-core machine. `credo diff`
+  # analyses the base first, in the colder VM, so an action dropped there comes
+  # back as a new issue on a branch that never touched it. Only time blocked on
+  # something other than loading code counts towards the limit, and a build that
+  # keeps computing is stopped by the work it does, not the time it takes.
+  defp await_build(pid, ref, blocked) do
     receive do
       {:DOWN, ^ref, :process, ^pid, {:built, built?}} -> built?
       {:DOWN, ^ref, :process, ^pid, _reason} -> false
     after
-      @build_timeout ->
-        Process.exit(pid, :kill)
-        Process.demonitor(ref, [:flush])
-        false
+      @poll_interval ->
+        case progress(pid) do
+          :loading_code -> await_build(pid, ref, blocked)
+          :running -> await_build(pid, ref, blocked)
+          :blocked when blocked < @max_blocked -> await_build(pid, ref, blocked + @poll_interval)
+          _stuck_or_runaway -> stop_build(pid, ref)
+        end
     end
+  end
+
+  defp progress(pid) do
+    case Process.info(pid, [:status, :current_function, :reductions]) do
+      nil ->
+        :running
+
+      [status: _, current_function: _, reductions: r] when r > @max_reductions ->
+        :runaway
+
+      [status: _, current_function: {module, _, _}, reductions: _] when module in @code_loading ->
+        :loading_code
+
+      [status: :waiting, current_function: _, reductions: _] ->
+        :blocked
+
+      _running_or_runnable ->
+        :running
+    end
+  end
+
+  defp stop_build(pid, ref) do
+    Process.exit(pid, :kill)
+    Process.demonitor(ref, [:flush])
+    false
   end
 
   defp atomic_changeset?(resource, action) do
@@ -186,8 +242,11 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
   defp issue(type, name, line, skipped, issue_meta) do
     format_issue(issue_meta,
       message:
-        "`#{type} :#{name}` sets `require_atomic? false`, but Ash builds it atomically. Without it " <>
-          "a bulk #{type} is one statement instead of one per record." <> skipped_note(skipped),
+        "`#{type} :#{name}` sets `require_atomic? false`, but Ash builds it atomically. Without the " <>
+          "option a bulk #{type} is one statement instead of one per record, and Ash calls each " <>
+          "change's `atomic/3` instead of `change/3`. Before removing it, check what the changes " <>
+          "read from the record as it was: a previous value read from `changeset.data` in " <>
+          "`change/3` has to become an expression in `atomic/3`." <> skipped_note(skipped),
       trigger: "require_atomic?",
       line_no: line
     )
@@ -199,7 +258,7 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     names = Enum.map_join(modules, ", ", &"`#{inspect(&1)}`")
     verb = if length(modules) == 1, do: "adds", else: "add"
 
-    " Before removing it: #{names} #{verb} a hook in `change/3` that `atomic/3` does not, so on " <>
-      "the atomic path that hook stops running; add it in `atomic/3` too."
+    " And #{names} #{verb} a hook in `change/3` that `atomic/3` does not, so on the atomic " <>
+      "path that hook stops running; add it in `atomic/3` too."
   end
 end

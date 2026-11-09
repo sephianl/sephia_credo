@@ -38,6 +38,17 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     assert Enum.any?(issues, &(&1.message =~ "`update :set_zone` sets `require_atomic? false`"))
   end
 
+  test "says to check what the changes read from the old record before removing the option" do
+    @source
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> Enum.each(fn issue ->
+      assert issue.message =~ "one statement instead of one per record"
+      assert issue.message =~ "check what the changes read from the record as it was"
+      assert issue.message =~ "`changeset.data`"
+    end)
+  end
+
   test "ignores an action with an anonymous change" do
     @source
     |> to_source_file()
@@ -61,7 +72,7 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     |> to_source_file()
     |> run_check(UnneededRequireAtomicFalse)
     |> assert_issue(fn issue ->
-      assert issue.message =~ "Before removing it: `SephiaCredo.Fixtures.LogMutation`"
+      assert issue.message =~ "And `SephiaCredo.Fixtures.LogMutation` adds a hook in `change/3`"
     end)
   end
 
@@ -80,7 +91,25 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     """
     |> to_source_file()
     |> run_check(UnneededRequireAtomicFalse)
-    |> assert_issue(fn issue -> refute issue.message =~ "Before removing it" end)
+    |> assert_issue(fn issue -> refute issue.message =~ "adds a hook" end)
+  end
+
+  test "does not name a change whose atomic/3 delegates to a change/3 adding its hook through a helper" do
+    """
+    defmodule SephiaCredo.Fixtures.Bin do
+      use Ash.Resource
+
+      actions do
+        update :logged_when_printed do
+          require_atomic? false
+          change SephiaCredo.Fixtures.LogMutationWhenPrinted
+        end
+      end
+    end
+    """
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> assert_issue(fn issue -> refute issue.message =~ "adds a hook" end)
   end
 
   test "leaves alone an un-archive action whose upgrade read hides archived rows" do

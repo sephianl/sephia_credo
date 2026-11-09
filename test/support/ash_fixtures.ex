@@ -116,6 +116,26 @@ defmodule SephiaCredo.Fixtures.LogMutationAtomically do
   def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
 end
 
+defmodule SephiaCredo.Fixtures.LogMutationWhenPrinted do
+  @moduledoc """
+  Adds its hook through a helper only when the line will be printed, with atomic/3 delegating to
+  change/3, like Zelo's MutationLogger.
+  """
+  use Ash.Resource.Change
+
+  @impl true
+  def change(changeset, _opts, _context),
+    do: log_after_action(changeset, Logger.compare_levels(:info, Logger.level()))
+
+  @impl true
+  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+
+  defp log_after_action(changeset, :lt), do: changeset
+
+  defp log_after_action(changeset, _printed),
+    do: Ash.Changeset.after_action(changeset, fn _changeset, record -> {:ok, record} end)
+end
+
 defmodule SephiaCredo.Fixtures.AskAbsentServer do
   @moduledoc "Asks a process that is not running from its atomic/3, like a feature-flag lookup."
   use Ash.Resource.Change
@@ -171,6 +191,11 @@ defmodule SephiaCredo.Fixtures.Bin do
     update :logged_atomically do
       require_atomic?(false)
       change(SephiaCredo.Fixtures.LogMutationAtomically)
+    end
+
+    update :logged_when_printed do
+      require_atomic?(false)
+      change(SephiaCredo.Fixtures.LogMutationWhenPrinted)
     end
   end
 end
@@ -239,6 +264,117 @@ defmodule SephiaCredo.Fixtures.Crate do
   end
 end
 
+for name <- [:Stamp, :Recount, :Weigh, :Seal, :Tag, :Shift, :Receive, :Number] do
+  defmodule Module.concat(SephiaCredo.Fixtures.Pallet.Changes, name) do
+    @moduledoc "A change on `SephiaCredo.Fixtures.Pallet`, whose source a test supplies."
+    use Ash.Resource.Change
+
+    @impl true
+    def change(changeset, _opts, _context), do: changeset
+  end
+end
+
+defmodule SephiaCredo.Fixtures.Pallet.Validations.Fits do
+  @moduledoc "A validation on `SephiaCredo.Fixtures.Pallet`, whose source a test supplies."
+  use Ash.Resource.Validation
+
+  @impl true
+  def validate(_changeset, _opts, _context), do: :ok
+end
+
+defmodule SephiaCredo.Fixtures.Pallet do
+  @moduledoc """
+  A resource whose actions `SephiaCredo.Fixtures.PalletService` runs in bulk or one record at a
+  time, for the checks that ask which.
+  """
+  use Ash.Resource,
+    domain: SephiaCredo.Fixtures.Domain,
+    data_layer: SephiaCredo.Fixtures.StoredDataLayer
+
+  alias SephiaCredo.Fixtures.Pallet.Changes
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:weight, :integer, public?: true)
+  end
+
+  changes do
+    change(Changes.Stamp, on: [:update])
+    change(Changes.Number, on: [:create])
+  end
+
+  actions do
+    defaults([:read])
+
+    create :receive do
+      change(Changes.Receive)
+    end
+
+    read :by_id do
+      argument(:id, :uuid, allow_nil?: false)
+      get?(true)
+      filter(expr(id == ^arg(:id)))
+    end
+
+    update :recount do
+      require_atomic?(false)
+      change(Changes.Recount)
+    end
+
+    update :weigh do
+      require_atomic?(false)
+      change(Changes.Weigh)
+      validate(SephiaCredo.Fixtures.Pallet.Validations.Fits)
+    end
+
+    update :seal do
+      require_atomic?(false)
+      change(Changes.Seal)
+    end
+
+    update :tag do
+      require_atomic?(false)
+      change(Changes.Tag)
+    end
+
+    update :shift do
+      require_atomic?(false)
+      change(Changes.Shift)
+    end
+  end
+
+  code_interface do
+    define(:get_by_id, action: :by_id, args: [:id])
+    define(:weigh)
+    define(:seal)
+    define(:tag)
+    define(:shift)
+  end
+end
+
+defmodule SephiaCredo.Fixtures.PalletService do
+  @moduledoc "Runs `SephiaCredo.Fixtures.Pallet`'s actions in bulk or one record at a time."
+  alias SephiaCredo.Fixtures.Pallet
+
+  def recount_all(query), do: Ash.bulk_update(query, :recount, %{})
+
+  def weigh(pallet) do
+    case Pallet.weigh(pallet) do
+      {:ok, weighed} -> weighed
+      {:error, error} -> raise error
+    end
+  end
+
+  def seal_all, do: Pallet |> Ash.read!() |> Pallet.seal()
+
+  def tag(id), do: id |> Pallet.get_by_id() |> tag_found()
+
+  def shift(pallets), do: Pallet.shift(pallets)
+
+  defp tag_found({:ok, pallet}), do: Pallet.tag(pallet)
+  defp tag_found(error), do: error
+end
+
 defmodule SephiaCredo.Fixtures.EmailJob do
   @moduledoc "Stands in for an `Oban.Worker` that wraps its own insert."
   @compile {:no_warn_undefined, [Oban]}
@@ -289,5 +425,6 @@ defmodule SephiaCredo.Fixtures.Domain do
     resource(SephiaCredo.Fixtures.Bin)
     resource(SephiaCredo.Fixtures.Shelf)
     resource(SephiaCredo.Fixtures.Crate)
+    resource(SephiaCredo.Fixtures.Pallet)
   end
 end

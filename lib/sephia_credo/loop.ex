@@ -186,4 +186,188 @@ defmodule SephiaCredo.Loop do
 
   defp generator?({:<-, _, _}), do: true
   defp generator?(_node), do: false
+
+  @doc """
+  The positions (`{line, column}`) of the calls in a reducing lambda that carry
+  the accumulator from one element to the next, out of `positions`, the calls
+  the caller cares about.
+
+  In `Enum.reduce/3`, `Enum.reduce_while/3`, `Enum.map_reduce/3` or
+  `Stream.transform/3`, a call that takes the accumulator as an argument and
+  whose result becomes the next accumulator cannot run before the previous
+  element's call returned: the loop is sequential by necessity. So is a call in
+  the returned value that takes that result, as `ended_at(result)` does in
+  `{result, ended_at(result)}`. A call that does not take the accumulator, like
+  `create(item)` in `fn item, {:ok, acc} -> ... end`, is independent per element
+  however the accumulator is built from it.
+  """
+  def carried_calls({:fn, _, clauses}, positions) when is_list(clauses) do
+    for {:->, _, [params, body]} <- clauses,
+        [_element, acc_pattern] <- [strip_guard(params)],
+        position <- carried_in_clause(pattern_vars(acc_pattern), body, positions),
+        into: MapSet.new(),
+        do: position
+  end
+
+  def carried_calls(_region, _positions), do: MapSet.new()
+
+  defp strip_guard([{:when, _, args}]), do: Enum.drop(args, -1)
+  defp strip_guard(params), do: params
+
+  defp carried_in_clause(acc_vars, body, positions) do
+    tails = tail_expressions(body)
+
+    body
+    |> call_nodes(positions)
+    |> Enum.filter(&takes_any?(&1, acc_vars))
+    |> Enum.flat_map(fn {position, _args} -> carried_from(position, body, tails, positions) end)
+  end
+
+  # The call and the calls in the returned value that take its result, when
+  # its result reaches the returned value at all.
+  defp carried_from(position, body, tails, positions) do
+    derived = derived_vars(body, position)
+
+    if Enum.any?(tails, &(contains_call?(&1, position) or mentions_any?(&1, derived))),
+      do: [position | tail_calls_taking(tails, derived, positions)],
+      else: []
+  end
+
+  defp call_nodes(ast, positions) do
+    {_ast, found} =
+      Macro.prewalk(ast, [], fn
+        {_fun, meta, args} = node, acc when is_list(args) and is_list(meta) ->
+          position = {meta[:line], meta[:column]}
+
+          if MapSet.member?(positions, position),
+            do: {node, [{position, args} | acc]},
+            else: {node, acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
+  end
+
+  # The accumulator itself is an argument, not a field read off it.
+  defp takes_any?({_position, args}, vars) do
+    Enum.any?(args, fn
+      {name, _, ctx} when is_atom(name) and is_atom(ctx) -> MapSet.member?(vars, name)
+      _arg -> false
+    end)
+  end
+
+  defp tail_calls_taking(tails, derived, positions) do
+    for tail <- tails,
+        {position, args} <- call_nodes(tail, positions),
+        Enum.any?(args, &mentions_any?(&1, derived)),
+        do: position
+  end
+
+  # The variables bound to the call's result, and to anything computed from
+  # them, in the order the body binds them.
+  defp derived_vars(body, position) do
+    bindings = bindings(body)
+
+    initial =
+      for {pattern, value} <- bindings, contains_call?(value, position), reduce: MapSet.new() do
+        acc -> MapSet.union(acc, pattern_vars(pattern))
+      end
+
+    Enum.reduce(bindings, initial, fn {pattern, value}, acc ->
+      if mentions_any?(value, acc), do: MapSet.union(acc, pattern_vars(pattern)), else: acc
+    end)
+  end
+
+  defp bindings(body) do
+    {_ast, found} =
+      Macro.prewalk(body, [], fn
+        {op, _, [pattern, value]} = node, acc when op in [:=, :<-] ->
+          {node, [{pattern, value} | acc]}
+
+        {:case, _, [value, [do: clauses]]} = node, acc when is_list(clauses) ->
+          {node, for({:->, _, [[pattern], _]} <- clauses, do: {pattern, value}) ++ acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(found)
+  end
+
+  defp tail_expressions({:__block__, _, [_ | _] = statements}),
+    do: tail_expressions(List.last(statements))
+
+  defp tail_expressions({:case, _, [_value, [do: clauses]]}) when is_list(clauses),
+    do: Enum.flat_map(clauses, &clause_tails/1)
+
+  defp tail_expressions({:cond, _, [[do: clauses]]}) when is_list(clauses),
+    do: Enum.flat_map(clauses, &clause_tails/1)
+
+  defp tail_expressions({kind, _, [_condition, kw]}) when kind in [:if, :unless] and is_list(kw),
+    do: kw |> Keyword.values() |> Enum.flat_map(&tail_expressions/1)
+
+  defp tail_expressions({:with, _, [_ | _] = args}) do
+    case List.last(args) do
+      kw when is_list(kw) -> Enum.flat_map(kw, &with_tails/1)
+      _other -> []
+    end
+  end
+
+  defp tail_expressions(expression), do: [expression]
+
+  defp with_tails({:do, body}), do: tail_expressions(body)
+
+  defp with_tails({:else, clauses}) when is_list(clauses),
+    do: Enum.flat_map(clauses, &clause_tails/1)
+
+  defp with_tails(_other), do: []
+
+  defp clause_tails({:->, _, [_patterns, body]}), do: tail_expressions(body)
+  defp clause_tails(_clause), do: []
+
+  defp contains_call?(ast, position) do
+    {_ast, found?} =
+      Macro.prewalk(ast, false, fn
+        {_fun, meta, args} = node, false when is_list(args) and is_list(meta) ->
+          {node, {meta[:line], meta[:column]} == position}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found?
+  end
+
+  defp mentions_any?(ast, vars) do
+    {_ast, found?} =
+      Macro.prewalk(ast, false, fn
+        {name, _, ctx} = node, false when is_atom(name) and is_atom(ctx) ->
+          {node, MapSet.member?(vars, name)}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found?
+  end
+
+  defp pattern_vars(pattern) do
+    {_ast, vars} =
+      Macro.prewalk(pattern, MapSet.new(), fn
+        {:^, _, _}, acc ->
+          {nil, acc}
+
+        {name, _, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
+          if String.starts_with?(Atom.to_string(name), "_"),
+            do: {node, acc},
+            else: {node, MapSet.put(acc, name)}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    vars
+  end
 end

@@ -52,7 +52,7 @@ defmodule SephiaCredo.Checks.ProjectImport do
 
   @impl true
   def run(%Credo.SourceFile{} = source_file, params) do
-    if test_code?(source_file) do
+    if TestFile.test_code?(source_file) do
       []
     else
       ast = Credo.SourceFile.ast(source_file)
@@ -68,11 +68,6 @@ defmodule SephiaCredo.Checks.ProjectImport do
 
       Credo.Code.prewalk(source_file, &collect(&1, &2, config))
     end
-  end
-
-  defp test_code?(%Credo.SourceFile{filename: filename} = source_file) do
-    segments = Path.split(filename)
-    TestFile.test_file?(source_file) or ("test" in segments and "lib" not in segments)
   end
 
   defp current_module(ast) do

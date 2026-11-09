@@ -19,16 +19,30 @@ defmodule SephiaCredo.Checks.EnumAtInLoop do
       and is not flagged. A negative one is not bounded — reaching `-1` means
       walking to the end — so it is flagged. Take the element once before the
       loop; `List.last/1` is the same O(n) walk and fixes nothing.
-      """
-    ]
+
+      Test code is left alone: `*_test.exs` files and anything under `test/`
+      that is not under `lib/`, such as `test/support`. The cost grows with
+      the collection, and a test walks a fixture of a few rows.
+      `include_tests: true` checks test code too.
+      """,
+      params: [
+        include_tests: "Check test files and test support code too."
+      ]
+    ],
+    param_defaults: [include_tests: false]
+
+  alias SephiaCredo.TestFile
 
   @impl true
   def run(source_file, params \\ []) do
     issue_meta = IssueMeta.for(source_file, params)
 
-    case Credo.Code.ast(source_file) do
-      {:ok, ast} -> find_issues(ast, issue_meta)
-      {:error, _} -> []
+    with true <-
+           Params.get(params, :include_tests, __MODULE__) or not TestFile.test_code?(source_file),
+         {:ok, ast} <- Credo.Code.ast(source_file) do
+      find_issues(ast, issue_meta)
+    else
+      _skipped_or_unparsable -> []
     end
   end
 

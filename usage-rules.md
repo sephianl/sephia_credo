@@ -131,7 +131,8 @@ reported: reaching `-1` walks to the end. Hoist it — the enumerable does not c
 
 **Before acting, check how big the collection is.** The check cannot see that, so `Enum.at` over a
 three-element config list is reported exactly like a walk over a large matrix. Both are O(n²); only
-one is worth changing. If it is small and fixed, silence the line rather than restructuring.
+one is worth changing. If it is small and fixed, silence the line rather than restructuring. Test
+code (`*_test.exs`, `test/support`) is not checked unless `include_tests: true` is set.
 
 ### `KeywordBagParameter` (refactor)
 
@@ -192,7 +193,8 @@ Flags `Repo.preload` or `Ash.load` inside `Enum.*`/`Stream.*` iteration, `Task.a
 Fix by loading the collection once — `Repo.preload(users, :posts)` or `Ash.load(records, :items)`;
 both take a list and batch the queries. Only per-element regions are examined, so the batched call
 that *feeds* a loop is already correct and is not what the report is pointing at — read the line
-number before rewriting anything.
+number before rewriting anything. Test code (`*_test.exs`, `test/support`) is not checked unless
+`include_tests: true` is set: a load per fixture row costs nothing worth saving.
 
 ### `ProcessSleepInTests` (refactor, test files)
 
@@ -396,38 +398,64 @@ convention the project opted into; if the check is wrong about it, say so.
 
 ### Query cost checks (warning/refactor, opt-in)
 
-`AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `DeepLoad` and
-`RollbackOnSuccess` report database work that multiplies with the rows. The four Ash ones also read
-the compiled project, so run `mix compile` before Credo, and a report on stale code is stale.
+`AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `MissingAtomicCallback`,
+`DeepLoad` and `RollbackOnSuccess` report database work that multiplies with the rows. The Ash ones also read
+the compiled project, so run `mix compile` before Credo, and a report on stale code is stale. They
+are experimental and may change between patch releases.
 
 Their reports are rarely wrong about what the code does (three of about 630 in two production
 codebases), so the risk is the opposite one: a "fix" that batches work which has to stay one row at
 a time. Before rewriting,
 confirm that the collection really holds many rows and that no step depends on the one before it.
-Each step reading what the previous one wrote, locks taken one by one in a fixed order, and a
-per-row fallback after a bulk call failed are deliberate. Mark those with the reason rather than
-batching them:
+A reduce whose call takes the accumulator and returns the next one is already left alone. Locks
+taken one by one in a fixed order, a per-row fallback after a bulk call failed, and a collection
+bounded by a domain invariant are deliberate. Do not mark those with a `# credo:disable` comment:
+name the function in the check's `allow` in `.credo.exs`, with the reason, and leave the code as it
+is. An entry without a reason stops the run.
 
 ```elixir
-# credo:disable-for-next-line SephiaCredo.Checks.AshActionInLoop
-# Each route departs when the previous one ends.
+{SephiaCredo.Checks.AshActionInLoop,
+ allow: [{MyApp.Routes.UnassignDriver, :handle_routes, "A driver overlaps at most one route"}]}
 ```
+
+`AshActionInLoop`, `PreloadInLoop` and `QueryWithoutBatchCallback` take `allow`; for
+`QueryWithoutBatchCallback` the function is the callback the report is on (`:validate`, `:change`,
+`:notify`).
 
 - **`AshActionInLoop`** — a database call once per element of a loop, directly or through the
   module's own functions; the message names the call and the line it is reached from. Use the
   batched form it names: one read filtering `id in ^ids` then a map lookup, `Ash.bulk_create/4`,
   `Ash.bulk_update/4` (same input for every record) or `Ash.update_many/4` (each its own),
   `Ash.bulk_destroy/4`, `Oban.insert_all/2`. One insert per job is not reported for a worker that
-  sets `unique`, since `insert_all` on Oban's Basic engine skips that check.
+  sets `unique`, since `insert_all` on Oban's Basic engine skips that check. Test code
+  (`*_test.exs`, `test/support`) is not checked unless `include_tests: true` is set: creating
+  fixtures one by one costs nothing worth saving, so do not batch a test's setup to please it.
 - **`QueryWithoutBatchCallback`** — a validation, change or notifier that queries per record in a
   bulk action. Add `batch_validate/3` or `batch_change/3` doing the query once for the batch; move
   action hook work to `after_batch/3`; give a notifier a `load/2`. Transaction hooks have no batch
-  form, so a change whose transaction hook does work is not reported. A change only single-record
-  actions use costs nothing yet, but say so when silencing it.
-- **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so remove
-  `require_atomic? false` and run the action's tests. If the message names a change whose hook the
-  atomic path would skip, give that change the hook in `atomic/3` (or `after_batch/3`) first —
-  otherwise removing the option silently stops the hook from running.
+  form, so a change whose transaction hook does work is not reported, and neither is an insert of a
+  job whose worker sets `unique`. A module is reported only when a bulk action can run it: a global
+  change or validation, or one on an action the compiled project runs in bulk (primary, a signal
+  listener, named in an `Ash.bulk_*`/`update_many` call, or a code interface handed anything not
+  shown to be one record). So a report means a bulk path exists: find it before deciding the module
+  is single-record only. If the caller handing a list is the mistake, fix the caller; if a context
+  flag skips the query in bulk, name the callback in `allow` with that reason.
+- **`MissingAtomicCallback`** — a change or validation on an update or destroy with no `atomic/3`.
+  Try to make it atomic before anything else: an expression for a value the database can compute,
+  `{:ok, change(changeset, opts, context)}` for a change that only adds an `after_action` hook
+  reading the updated record, a failing condition and error for a validation. Do not wrap a change
+  that reads `changeset.data`: on the atomic bulk path it does not hold the row. Only when it cannot
+  be atomic, return `{:not_atomic, "the specific reason"}`; a stub with a vague reason defeats the
+  point.
+- **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so without
+  `require_atomic? false` a bulk update is one statement instead of one per record. Removing it is
+  not behaviour-neutral: on the atomic path Ash calls each change's `atomic/3` instead of
+  `change/3`, and `changeset.data` does not hold the row as it was. Read every change on the action
+  first; one that reads a previous value from `changeset.data` (the status an order moves from)
+  needs that read as an expression in `atomic/3` before the option goes. If the message names a
+  change whose hook the atomic path would skip, give that change the hook in `atomic/3` (or
+  `after_batch/3`) first — otherwise removing the option silently stops the hook from running.
+  Passing tests show the action still builds, not that it still behaves the same.
 - **`DeepLoad`** — a load naming more than `max_relationships` relationships, each its own query.
   Find what each caller reads before trimming: a default load in `prepare build(load: ...)` is
   shared by every caller of the action. Where one value of a relationship is needed (a count, an

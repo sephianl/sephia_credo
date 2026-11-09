@@ -360,4 +360,48 @@ defmodule SephiaCredo.Checks.PreloadInLoopTest do
       |> refute_issues()
     end
   end
+
+  describe "allow" do
+    test "leaves alone the loops of a function an entry names" do
+      """
+      defmodule MyApp.Accounts do
+        def owners(companies), do: Enum.map(companies, &Ash.load(&1, :owner))
+      end
+      """
+      |> to_source_file()
+      |> run_check(PreloadInLoop, allow: [{MyApp.Accounts, :owners, "Called with one company"}])
+      |> refute_issues()
+    end
+  end
+
+  describe "test code" do
+    @fixture_loop """
+    defmodule SampleTest do
+      test "loads each post", %{posts: posts} do
+        Enum.each(posts, &Ash.load(&1, :comments))
+      end
+    end
+    """
+
+    test "ignores a test file" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(PreloadInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores test support code" do
+      @fixture_loop
+      |> to_source_file("test/support/factory.ex")
+      |> run_check(PreloadInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a test file with include_tests" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(PreloadInLoop, include_tests: true)
+      |> assert_issue()
+    end
+  end
 end

@@ -256,4 +256,35 @@ defmodule SephiaCredo.Checks.EnumAtInLoopTest do
       |> assert_issue()
     end
   end
+
+  describe "test code" do
+    @fixture_loop """
+    defmodule SampleTest do
+      test "keeps the order", %{stops: stops, expected: expected} do
+        Enum.each(0..2, fn i -> assert Enum.at(stops, i) == Enum.at(expected, i) end)
+      end
+    end
+    """
+
+    test "ignores a test file" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(EnumAtInLoop)
+      |> refute_issues()
+    end
+
+    test "ignores test support code" do
+      @fixture_loop
+      |> to_source_file("test/support/assertions.ex")
+      |> run_check(EnumAtInLoop)
+      |> refute_issues()
+    end
+
+    test "flags a test file with include_tests" do
+      @fixture_loop
+      |> to_source_file("test/my_app/sample_test.exs")
+      |> run_check(EnumAtInLoop, include_tests: true)
+      |> assert_issues()
+    end
+  end
 end
