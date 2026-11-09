@@ -264,7 +264,7 @@ defmodule SephiaCredo.Fixtures.Crate do
   end
 end
 
-for name <- [:Stamp, :Recount, :Weigh, :Seal, :Tag, :Shift] do
+for name <- [:Stamp, :Recount, :Weigh, :Seal, :Tag, :Shift, :Receive, :Number] do
   defmodule Module.concat(SephiaCredo.Fixtures.Pallet.Changes, name) do
     @moduledoc "A change on `SephiaCredo.Fixtures.Pallet`, whose source a test supplies."
     use Ash.Resource.Change
@@ -300,10 +300,15 @@ defmodule SephiaCredo.Fixtures.Pallet do
 
   changes do
     change(Changes.Stamp, on: [:update])
+    change(Changes.Number, on: [:create])
   end
 
   actions do
     defaults([:read])
+
+    create :receive do
+      change(Changes.Receive)
+    end
 
     read :by_id do
       argument(:id, :uuid, allow_nil?: false)

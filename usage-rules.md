@@ -398,8 +398,8 @@ convention the project opted into; if the check is wrong about it, say so.
 
 ### Query cost checks (warning/refactor, opt-in)
 
-`AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `DeepLoad` and
-`RollbackOnSuccess` report database work that multiplies with the rows. The four Ash ones also read
+`AshActionInLoop`, `QueryWithoutBatchCallback`, `UnneededRequireAtomicFalse`, `MissingAtomicCallback`,
+`DeepLoad` and `RollbackOnSuccess` report database work that multiplies with the rows. The Ash ones also read
 the compiled project, so run `mix compile` before Credo, and a report on stale code is stale. They
 are experimental and may change between patch releases.
 
@@ -440,6 +440,13 @@ is. An entry without a reason stops the run.
   shown to be one record). So a report means a bulk path exists: find it before deciding the module
   is single-record only. If the caller handing a list is the mistake, fix the caller; if a context
   flag skips the query in bulk, name the callback in `allow` with that reason.
+- **`MissingAtomicCallback`** — a change or validation on an update or destroy with no `atomic/3`.
+  Try to make it atomic before anything else: an expression for a value the database can compute,
+  `{:ok, change(changeset, opts, context)}` for a change that only adds an `after_action` hook
+  reading the updated record, a failing condition and error for a validation. Do not wrap a change
+  that reads `changeset.data`: on the atomic bulk path it does not hold the row. Only when it cannot
+  be atomic, return `{:not_atomic, "the specific reason"}`; a stub with a vague reason defeats the
+  point.
 - **`UnneededRequireAtomicFalse`** — Ash builds the action atomically, so without
   `require_atomic? false` a bulk update is one statement instead of one per record. Removing it is
   not behaviour-neutral: on the atomic path Ash calls each change's `atomic/3` instead of

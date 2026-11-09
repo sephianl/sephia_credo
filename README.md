@@ -77,6 +77,7 @@ mix deps.get
           # Query cost: run Credo after `mix compile`.
           # {SephiaCredo.Checks.AshActionInLoop, []},
           # {SephiaCredo.Checks.DeepLoad, max_relationships: 4},
+          # {SephiaCredo.Checks.MissingAtomicCallback, []},
           # {SephiaCredo.Checks.QueryWithoutBatchCallback, []},
           # {SephiaCredo.Checks.RollbackOnSuccess, []},
           # {SephiaCredo.Checks.UnneededRequireAtomicFalse, []}
@@ -106,6 +107,7 @@ Checks marked *opt-in* are not in the generated config. Each has its own section
 | `KeywordBagParameter` | Refactor | Flags a parameter the body only reaches into with `Keyword.get/fetch/take` — a parameter list in disguise |
 | `MapAsSet` | Refactor | Flags membership testing against `Map.keys/1` — allocates and scans where `Map.has_key?/2` is O(1) |
 | `ModuleLayout` | Design *(opt-in)* | Flags a module under `included_paths` whose file path does not spell its name |
+| `MissingAtomicCallback` | Warning *(opt-in)* | Flags a change or validation an update or destroy runs that has no `atomic/3`: make it atomic, or say why it cannot be |
 | `MultiStepMutationWithoutTransaction` | Warning | Flags a function performing 2+ database mutations outside a transaction — a mid-sequence failure leaves partial state |
 | `PatternMatchInFunctionHead` | Refactor | Flags a single-clause function whose whole body is a `case` on one of its own parameters |
 | `PreloadInLoop` | Warning | Flags `Repo.preload` / `Ash.load` inside `Enum.*`, `Stream.*`, `Task.async_stream` or `for` — one query per element (N+1) |
@@ -438,6 +440,10 @@ Test code is not checked: `*_test.exs` files and anything under `test/` that is 
 `DeepLoad` counts relationships from the compiled resource, only where it knows the resource: a read action's `prepare build(load: ...)`, a code interface's `load:`, and `Ash.read/2`, `Ash.get/3` or `Ash.Query.load/2` on a named resource. Module attributes are followed anywhere in the tree. Manual relationships and ones into resources kept in memory are not counted.
 
 Where the caller needs one value of a relationship (a count, a sum, an existence check), an aggregate or an expression calculation returns it in the main query. Where it needs the related records, keep the load: it is already one query per relationship however many rows there are, and reading them per record instead is the N+1 the load avoids.
+
+### MissingAtomicCallback
+
+A change or validation without `atomic/3` silently decides that every update or destroy running it cannot be atomic. Try to make it atomic first: an expression for a value the database can compute, `{:ok, change(changeset, opts, context)}` for a change that only adds an `after_action` hook reading the updated record, or a failing condition and its error for a validation. Only when it really cannot be, return `{:not_atomic, "the reason"}`, so the next reader knows it was decided. A module the compiled project runs on nothing but creates is not reported, since `atomic/3` is never called for a create.
 
 ### QueryWithoutBatchCallback
 

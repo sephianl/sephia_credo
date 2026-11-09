@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MissingAtomicCallback` *(Warning, opt-in)* — a change or validation an update or destroy runs that has no `atomic/3`. The message says to try making it atomic, and to return `{:not_atomic, "the reason"}` only when it cannot be, so the decision is written down. A module only creates run is left alone. Run after `mix compile`.
+
 - `AshActionInLoop`, `PreloadInLoop` and `QueryWithoutBatchCallback` take `allow`: functions whose reports are decided, as `{Module, :function, "reason"}` or `{Module, :function, arity, "reason"}` in `.credo.exs`. It exempts every report inside the named function, or for `QueryWithoutBatchCallback` the callback the report is on. A loop bounded by a domain invariant the code cannot show, such as Zelo's `UnassignDriverFromOverlappingRoutes.handle_routes`, which unassigns the zero or one route a driver overlaps one at a time through a non-atomic action that would stream per record in bulk anyway, used to need a `# credo:disable-for-next-line` beside the code; the checks' explanations, the README and `usage-rules.md` told users to write one. The decision now lives in one reviewed list with its reason, and an entry without a reason stops the run.
 
 ### Changed

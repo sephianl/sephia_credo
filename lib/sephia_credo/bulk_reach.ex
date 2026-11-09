@@ -82,6 +82,30 @@ defmodule SephiaCredo.BulkReach do
   def reach(nil, _module), do: :unknown
   def reach(key, module), do: key |> :persistent_term.get(nil) |> index_reach(module)
 
+  @doc """
+  Whether every use of `module` is on a create; `false` when there is no index
+  or no resource uses the module.
+  """
+  def only_creates?(nil, _module), do: false
+
+  def only_creates?(key, module) do
+    case :persistent_term.get(key, nil) do
+      nil -> false
+      index -> index |> uses(module) |> all_creates?(module)
+    end
+  end
+
+  defp all_creates?([], _module), do: false
+  defp all_creates?(uses, module), do: Enum.all?(uses, &creates_only?(&1, module))
+
+  defp creates_only?({:action, _resource, action}, _module), do: action.type == :create
+
+  defp creates_only?({:global, resource}, module) do
+    (Ash.Resource.Info.changes(resource) ++ Ash.Resource.Info.validations(resource))
+    |> Enum.filter(&entry?(&1, module))
+    |> Enum.all?(&(List.wrap(&1.on) == [:create]))
+  end
+
   defp index_reach(nil, _module), do: :unknown
   defp index_reach(index, module), do: index |> uses(module) |> uses_reach(index)
 
