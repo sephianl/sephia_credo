@@ -27,7 +27,7 @@ Add `sephia_credo` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sephia_credo, "~> 0.10", only: [:dev, :test], runtime: false}
+    {:sephia_credo, "~> 0.11", only: [:dev, :test], runtime: false}
   ]
 end
 ```
