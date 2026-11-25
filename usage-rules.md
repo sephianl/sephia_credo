@@ -455,7 +455,9 @@ is. An entry without a reason stops the run.
   needs that read as an expression in `atomic/3` before the option goes. If the message names a
   change whose hook the atomic path would skip, give that change the hook in `atomic/3` (or
   `after_batch/3`) first — otherwise removing the option silently stops the hook from running.
-  Passing tests show the action still builds, not that it still behaves the same.
+  Passing tests show the action still builds, not that it still behaves the same. An update on a
+  resource with a `pre_check_with` identity is never reported: its single-record update always
+  carries the identity's `before_action` check, so it needs the option.
 - **`DeepLoad`** — a load naming more than `max_relationships` relationships, each its own query.
   Find what each caller reads before trimming: a default load in `prepare build(load: ...)` is
   shared by every caller of the action. Where one value of a relationship is needed (a count, an

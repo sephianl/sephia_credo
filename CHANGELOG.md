@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `UnneededRequireAtomicFalse` no longer reports an update on a resource with an identity that has `pre_check_with` (or `pre_check? true`). `Ash.Changeset.for_update/4` adds every such identity's check as a `before_action` hook, whether or not the action changes its keys, and a single-record update will not run that phase atomically. `fully_atomic_changeset/4`, which the check builds with, skips that step, so the check called the option unneeded on an action that raises `MustBeAtomic` without it. On Zelo, removing it from `Zelo.OAuth.AccessToken`'s `revoke_token`, whose resource pre-checks a unique refresh token, broke every token revocation.
+
 ## [0.11.0] - 2026-11-09
 
 ### Added

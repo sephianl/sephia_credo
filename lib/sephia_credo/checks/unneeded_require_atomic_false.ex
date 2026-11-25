@@ -58,6 +58,13 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
       the primary read, and AshArchival hides archived rows from every read
       not in `exclude_read_actions`, so the atomic path finds nothing to
       un-archive and fails with `StaleRecord`.
+
+      An update on a resource with an identity that has `pre_check_with` (or
+      `pre_check? true`) is left alone as well. Building a single-record update
+      adds that identity's check as a `before_action` hook, even when the
+      action never changes its keys, and Ash will not run a hook in that phase
+      atomically, so the update fails with `MustBeAtomic` without the option.
+      `fully_atomic_changeset/4` skips that step, which is why it builds.
       """
     ]
 
@@ -98,6 +105,7 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
         action = Info.action(resource, name, type),
         action != nil,
         not unarchives_hidden_row?(resource, action),
+        not pre_checks_identity?(resource, action),
         builds_atomically?(resource, action) do
       issue(type, name, line, skipped_hooks(resource, action), issue_meta)
     end
@@ -131,6 +139,15 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalse do
     AshArchival.Resource.Info.archive_base_filter?(resource) or
       read not in AshArchival.Resource.Info.archive_exclude_read_actions!(resource)
   end
+
+  # `Ash.Changeset.for_update/4` registers every `pre_check_with` identity's
+  # check as a `before_action` hook, whether or not the action changes its keys,
+  # and a single-record update refuses the atomic path for any such hook.
+  # `fully_atomic_changeset/4` never registers it, so it builds anyway.
+  defp pre_checks_identity?(resource, %{type: :update}),
+    do: Enum.any?(Info.identities(resource), & &1.pre_check_with)
+
+  defp pre_checks_identity?(_resource, _action), do: false
 
   defp skipped_hooks(resource, action) do
     (action.changes ++ Info.changes(resource, action.type))

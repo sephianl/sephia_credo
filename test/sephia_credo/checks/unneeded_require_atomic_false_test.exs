@@ -140,6 +140,39 @@ defmodule SephiaCredo.Checks.UnneededRequireAtomicFalseTest do
     assert issues |> Enum.map(& &1.line_no) |> Enum.sort() == [10, 14]
   end
 
+  test "leaves alone an update on a resource whose identity is pre-checked" do
+    """
+    defmodule SephiaCredo.Fixtures.Token do
+      use Ash.Resource
+
+      actions do
+        update :revoke do
+          require_atomic? false
+        end
+
+        destroy :purge do
+          require_atomic? false
+        end
+      end
+    end
+    """
+    |> to_source_file()
+    |> run_check(UnneededRequireAtomicFalse)
+    |> assert_issue(fn issue -> assert issue.message =~ "`destroy :purge`" end)
+  end
+
+  test "the pre-checked identity's hook is what keeps a single-record update off the atomic path" do
+    record = %SephiaCredo.Fixtures.Token{id: Ash.UUID.generate()}
+    changeset = Ash.Changeset.for_update(record, :revoke, %{}, authorize?: false)
+
+    assert :before_action in changeset.dirty_hooks
+
+    assert %Ash.Changeset{} =
+             Ash.Changeset.fully_atomic_changeset(SephiaCredo.Fixtures.Token, :revoke, %{},
+               authorize?: false
+             )
+  end
+
   test "reads a fragment's actions from the resource that includes it" do
     """
     defmodule SephiaCredo.Fixtures.Crate.Actions do

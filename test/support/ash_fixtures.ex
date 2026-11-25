@@ -238,6 +238,34 @@ defmodule SephiaCredo.Fixtures.Shelf do
   end
 end
 
+defmodule SephiaCredo.Fixtures.Token do
+  @moduledoc "A resource whose identity is pre-checked, so its single-record updates add a before_action hook."
+  use Ash.Resource, domain: SephiaCredo.Fixtures.Domain
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:refresh_token, :string, public?: true)
+    attribute(:revoked_at, :utc_datetime_usec, public?: true)
+  end
+
+  identities do
+    identity(:unique_refresh_token, [:refresh_token], pre_check_with: SephiaCredo.Fixtures.Domain)
+  end
+
+  actions do
+    defaults([:read])
+
+    update :revoke do
+      require_atomic?(false)
+      change(set_attribute(:revoked_at, &DateTime.utc_now/0))
+    end
+
+    destroy :purge do
+      require_atomic?(false)
+    end
+  end
+end
+
 defmodule SephiaCredo.Fixtures.Crate.Actions do
   @moduledoc "A fragment holding a resource's actions."
   use Spark.Dsl.Fragment, of: Ash.Resource
@@ -424,6 +452,7 @@ defmodule SephiaCredo.Fixtures.Domain do
     resource(SephiaCredo.Fixtures.Note)
     resource(SephiaCredo.Fixtures.Bin)
     resource(SephiaCredo.Fixtures.Shelf)
+    resource(SephiaCredo.Fixtures.Token)
     resource(SephiaCredo.Fixtures.Crate)
     resource(SephiaCredo.Fixtures.Pallet)
   end
